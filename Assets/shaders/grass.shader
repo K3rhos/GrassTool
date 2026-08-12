@@ -121,7 +121,7 @@ PS
 	#include "common/pixel.hlsl"
 
 	// Blades are single-sided geometry viewed from every angle, so backfaces must render.
-	RenderState( CullMode, NONE );
+    RenderState(CullMode, NONE);
 
 	float3 GrassRootColor < Attribute( "GrassRootColor" ); Default3( 0.11, 0.20, 0.06 ); >;
 	float3 GrassTipColor < Attribute( "GrassTipColor" ); Default3( 0.42, 0.58, 0.18 ); >;
@@ -155,6 +155,6 @@ PS
 		m.WorldTangentV = i.vTangentVWs;
 		m.TextureCoords = i.vTextureCoords.xy;
 
-		return ShadingModelStandard::Shade( i, m );
+        return ShadingModelStandard::Shade(i, m);
 	}
 }

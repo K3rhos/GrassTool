@@ -97,7 +97,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 	protected override void OnDisabled()
 	{
-		_lastCamera?.RemoveCommandList( _commandList );
+		_lastCamera?.RemoveCommandList(_commandList);
 		_lastCamera = null;
 
 		_commandList?.Reset();
@@ -114,37 +114,72 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 	protected override void OnUpdate()
 	{
-		// Only a scene camera's command list actually replays, in the editor viewport as well as
-		// in game. The editor camera never replays one, so it can't own the list.
-		var renderCamera = Scene.Camera;
+		var renderCamera = GetRenderCamera();
 
-		if ( renderCamera != _lastCamera )
+		// Re-attach when the camera changes, and also when the one we attached to stopped being
+		// valid. Leaving play mode destroys the play camera without the reference here changing,
+		// so comparing references alone would leave us bound to a dead camera forever.
+		if (renderCamera != _lastCamera || !_lastCamera.IsValid())
 		{
-			_lastCamera?.RemoveCommandList( _commandList );
-			renderCamera?.AddCommandList( _commandList, RenderStage.AfterOpaque );
-			_lastCamera = renderCamera;
+			if (_lastCamera.IsValid())
+				_lastCamera.RemoveCommandList(_commandList);
+
+			_lastCamera = null;
+
+			if (renderCamera.IsValid())
+			{
+				renderCamera.AddCommandList(_commandList, RenderStage.AfterOpaque);
+				_lastCamera = renderCamera;
+			}
 		}
 
-		if ( !renderCamera.IsValid() )
+		// Nothing to draw through until a camera exists. State is cleared above, so we pick one
+		// up as soon as one appears.
+		if (!_lastCamera.IsValid())
 			return;
 
-		// ...but culling has to follow whichever camera the viewport is actually looking through,
-		// or nothing generates outside the game camera's frustum while you're editing.
+		// Culling follows whichever camera the viewport actually looks through, which is not
+		// necessarily the one replaying the list.
 		var cullCamera = GetCullCamera();
-		if ( !cullCamera.IsValid() )
+		
+		if (!cullCamera.IsValid())
 			return;
 
 		RefreshBuffers();
-		RecordCommandList( cullCamera );
+		RecordCommandList(cullCamera);
 	}
 
-	private CameraComponent GetCullCamera()
+	/// <summary>
+	/// The camera whose command list actually replays. A scene camera does so in the editor
+	/// viewport as well as in game, so it wins when one exists; with an empty scene the editor
+	/// camera is the only thing left that will replay ours.
+	/// </summary>
+	private CameraComponent GetRenderCamera()
 	{
-		if ( Game.IsPlaying )
+		if (Scene.Camera.IsValid())
 			return Scene.Camera;
 
-		var editorCamera = Application.Editor?.Camera;
-		return editorCamera.IsValid() ? editorCamera : Scene.Camera;
+		if (Scene.IsEditor)
+			return Application.Editor?.Camera;
+
+		return null;
+	}
+
+	/// <summary>
+	/// The camera the blades are generated for. While editing this is the viewport camera, or
+	/// nothing outside the game camera's frustum would ever be generated.
+	/// </summary>
+	private CameraComponent GetCullCamera()
+	{
+		if (Scene.IsEditor)
+		{
+			var editorCamera = Application.Editor?.Camera;
+			
+			if (editorCamera.IsValid())
+				return editorCamera;
+		}
+
+		return Scene.Camera;
 	}
 
 	/// <summary>

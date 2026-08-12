@@ -100,4 +100,9 @@ public sealed class GrassDefinition : GameResource
 		attributes.Set( "GrassWindSpeed", WindSpeed );
 		attributes.Set( "GrassWindWaveScale", WindWaveScale );
 	}
+	
+	protected override Bitmap CreateAssetTypeIcon(int _Width, int _Height)
+	{
+		return CreateSimpleAssetTypeIcon("grass", _Width, _Height, "#070f0a", "#7cfba9");
+	}
 }
