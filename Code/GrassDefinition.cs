@@ -53,8 +53,19 @@ public sealed class GrassDefinition : GameResource
 	[Property, Group( "Color" ), Range( 0, 1 )]
 	public float RootOcclusion { get; set; } = 0.4f;
 
+	/// <summary>
+	/// Light bleeding through the blade from a source behind it. This is most of what sells a
+	/// field backlit by a low sun. Fades out toward the root, where the canopy is dense.
+	/// </summary>
+	[Property, Group( "Color" ), Range( 0, 2 )]
+	public float Transmission { get; set; } = 0.5f;
+
+	/// <summary>
+	/// Softens the lighting terminator. A blade is thin rather than solid, so a hard cutoff at
+	/// grazing light turns a field into a mass of black edges.
+	/// </summary>
 	[Property, Group( "Color" ), Range( 0, 1 )]
-	public float Roughness { get; set; } = 0.7f;
+	public float Wrap { get; set; } = 0.5f;
 
 	/// <summary>
 	/// Pushes the lighting normal toward world up. Grass lit by its true geometric normal reads
@@ -92,7 +103,8 @@ public sealed class GrassDefinition : GameResource
 		attributes.Set( "GrassTipColor", (Vector3)TipColor );
 		attributes.Set( "GrassColorVariation", ColorVariation );
 		attributes.Set( "GrassRootOcclusion", RootOcclusion );
-		attributes.Set( "GrassRoughness", Roughness );
+		attributes.Set( "GrassTransmission", Transmission );
+		attributes.Set( "GrassWrap", Wrap );
 		attributes.Set( "GrassNormalUpBias", NormalUpBias );
 
 		attributes.Set( "GrassWindDirection", WindDirection.Normal );

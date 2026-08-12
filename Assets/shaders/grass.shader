@@ -123,38 +123,77 @@ PS
 	// Blades are single-sided geometry viewed from every angle, so backfaces must render.
     RenderState(CullMode, NONE);
 
+	#include "common/classes/Light.hlsl"
+	#include "common/classes/AmbientLight.hlsl"
+
 	float3 GrassRootColor < Attribute( "GrassRootColor" ); Default3( 0.11, 0.20, 0.06 ); >;
 	float3 GrassTipColor < Attribute( "GrassTipColor" ); Default3( 0.42, 0.58, 0.18 ); >;
 	float GrassColorVariation < Attribute( "GrassColorVariation" ); Default( 0.25 ); >;
 	float GrassRootOcclusion < Attribute( "GrassRootOcclusion" ); Default( 0.4 ); >;
-	float GrassRoughness < Attribute( "GrassRoughness" ); Default( 0.7 ); >;
+	float GrassTransmission < Attribute( "GrassTransmission" ); Default( 0.5 ); >;
+	float GrassWrap < Attribute( "GrassWrap" ); Default( 0.5 ); >;
+
+	// Cascade shadows without the screen-space contact shadow mask that
+	// DirectionalLightShadow::GetVisibility folds in. That mask is built from the depth prepass,
+	// which this grass never takes part in, so at every blade it holds the shadowing of whatever
+	// geometry is behind it - the blades end up wearing the silhouette of the background.
+	float SunVisibility( float3 worldPosition, float2 screenPosition )
+	{
+		if ( g_DirectionalLightCascadeCount == 0 )
+			return 1.0f;
+
+		// FindCascade is a free function in DirectionalLightShadow.hlsl, not a member of the struct.
+		float3 positionLs;
+		int cascade = FindCascade( worldPosition, positionLs );
+
+		if ( cascade < 0 )
+			return 1.0f;
+
+		return DirectionalLightShadow::SampleCascade( cascade, worldPosition, screenPosition );
+	}
 
 	float4 MainPs( PixelInput i ) : SV_Target0
 	{
 		float t = i.vBladeCoords.x;
 		float tint = i.vBladeCoords.y;
 
-		Material m = Material::Init();
-
 		float3 albedo = lerp( GrassRootColor, GrassTipColor, t );
 		albedo *= lerp( 1.0 - GrassColorVariation, 1.0 + GrassColorVariation, tint );
 
-		m.Albedo = albedo;
-		m.Normal = normalize( i.vNormalWs );
-		m.Roughness = GrassRoughness;
-		m.Metalness = 0;
-		m.AmbientOcclusion = lerp( 1.0 - GrassRootOcclusion, 1.0, t );
-		m.TintMask = 1;
-		m.Opacity = 1;
+		float3 normalWs = normalize( i.vNormalWs );
+		float3 worldPosition = i.vPositionWithOffsetWs + g_vHighPrecisionLightingOffsetWs.xyz;
 
-		// Light thrown through the blade from behind, which is most of what sells a grass field
-		// backlit by a low sun.
-		m.Transmission = saturate( 0.35 + t * 0.35 );
+		// Blades are thin and translucent, so light bleeding through from behind matters as much
+		// as light landing on the front. Both fall off toward the root, where the canopy is dense.
+		float transmission = GrassTransmission * t;
+		float occlusion = lerp( 1.0 - GrassRootOcclusion, 1.0, t );
 
-		m.WorldTangentU = i.vTangentUWs;
-		m.WorldTangentV = i.vTangentVWs;
-		m.TextureCoords = i.vTextureCoords.xy;
+		float3 diffuse = 0.0f;
 
-        return ShadingModelStandard::Shade(i, m);
+		uint lightCount = Light::Count( i.vPositionSs );
+		for ( uint index = 0; index < lightCount; index++ )
+		{
+			Light light = Light::From( worldPosition, i.vPositionSs, index );
+
+			// Light::From resolves visibility through the screen-space mask; swap in a cascade-only
+			// value so the sun still casts real shadows on the grass without that contamination.
+			if ( light.LightData.Type == LightType::LightTypeDirectional )
+				light.Visibility = SunVisibility( worldPosition, i.vPositionSs.xy );
+
+			float ndotl = dot( normalWs, light.Direction );
+
+			// Wrapped diffuse rather than saturate( ndotl ): a blade is not an opaque solid, and a
+			// hard terminator across a field of them reads as a mass of black edges.
+			float front = saturate( ( ndotl + GrassWrap ) / ( 1.0f + GrassWrap ) );
+			float back = saturate( -ndotl ) * transmission;
+
+			diffuse += light.Color * light.Attenuation * light.Visibility * ( front + back );
+		}
+
+		float3 ambient = AmbientLight::From( worldPosition, i.vPositionSs, normalWs );
+
+		float3 color = albedo * ( diffuse + ambient ) * occlusion;
+
+		return float4( color, 1.0f );
 	}
 }
