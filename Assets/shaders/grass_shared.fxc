@@ -1,0 +1,41 @@
+#ifndef GRASS_SHARED_H
+#define GRASS_SHARED_H
+
+// Must match GrassStorage.ChunkResolution / CellSize and the C# struct layouts in
+// GrassSceneObject.cs. These are packed for 16-byte alignment on the GPU side.
+
+#define GRASS_CHUNK_RESOLUTION 64
+#define GRASS_CELL_SIZE 32.0
+#define GRASS_CELLS_PER_CHUNK ( GRASS_CHUNK_RESOLUTION * GRASS_CHUNK_RESOLUTION )
+
+// Vertices per blade: 3 segments as a 7-vertex strip, expanded to 5 triangles.
+#define GRASS_BLADE_SEGMENTS 3
+#define GRASS_BLADE_STRIP_VERTS ( GRASS_BLADE_SEGMENTS * 2 + 1 )
+#define GRASS_BLADE_VERTS ( ( GRASS_BLADE_STRIP_VERTS - 2 ) * 3 )
+
+struct GrassCell
+{
+	float Height;
+	uint Packed; // density (0-7) | normal.x (8-15) | normal.y (16-23)
+};
+
+struct GrassChunk
+{
+	float2 Origin;
+	int CellOffset;
+	int Pad;
+};
+
+struct GrassBlade
+{
+	float3 Position;
+	float Yaw;
+	float3 Normal;
+	float Height;
+	float Width;
+	float Tint;
+	float Phase;
+	float Pad; // keeps the struct at 48 bytes
+};
+
+#endif // GRASS_SHARED_H
