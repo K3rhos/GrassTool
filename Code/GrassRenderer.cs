@@ -55,6 +55,15 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	[Property, Group( "General" ), Range( 50000, 4000000 )]
 	public int MaxBlades { get; set; } = 500000;
 
+	/// <summary>
+	/// How far outside the camera frustum blades are still generated, in world units. Culling is
+	/// done against the frustum as it was when the frame started, so turning the camera brings in
+	/// blades that were never generated. Raise this if they visibly stream in at the screen edges,
+	/// which is most obvious at low or capped framerates.
+	/// </summary>
+	[Property, Group( "General" ), Range( 0, 4000 )]
+	public float CullPadding { get; set; } = 1000.0f;
+
 	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
 	[Property, Hide]
 	public GrassStorage Storage { get; set; } = new();
@@ -326,19 +335,30 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	{
 		var frustum = camera.GetFrustum();
 
+		// These planes are sampled once on the CPU but the blades they cull are not drawn until the
+		// frame presents, by which point the camera has kept turning. Pushing every plane outward
+		// gives the generation something to work with at the screen edges - without it, blades
+		// rotating into view were culled before they were ever needed, which reads as them
+		// streaming in from the sides. The slack that buys scales with the frame time, so a capped
+		// or struggling framerate is exactly when it matters most.
+		var padding = MathF.Max( CullPadding, 0.0f );
+
 		// Plane.GetDistance is dot( point, Normal ) - Distance, so w is negated to let the shader
-		// use a plain dot( xyz, p ) + w.
-		_planeScratch[0] = ToVector4( frustum.LeftPlane );
-		_planeScratch[1] = ToVector4( frustum.RightPlane );
-		_planeScratch[2] = ToVector4( frustum.TopPlane );
-		_planeScratch[3] = ToVector4( frustum.BottomPlane );
-		_planeScratch[4] = ToVector4( frustum.NearPlane );
-		_planeScratch[5] = ToVector4( frustum.FarPlane );
+		// use a plain dot( xyz, p ) + w. Adding the padding there slides the plane outward.
+		_planeScratch[0] = ToVector4( frustum.LeftPlane, padding );
+		_planeScratch[1] = ToVector4( frustum.RightPlane, padding );
+		_planeScratch[2] = ToVector4( frustum.TopPlane, padding );
+		_planeScratch[3] = ToVector4( frustum.BottomPlane, padding );
+		_planeScratch[4] = ToVector4( frustum.NearPlane, padding );
+
+		// The far plane is left tight - MaxDistance already governs the far edge, and padding it
+		// would only generate blades that fade out before they are ever visible.
+		_planeScratch[5] = ToVector4( frustum.FarPlane, 0.0f );
 
 		_frustumPlaneBuffer.SetData( _planeScratch );
 
-		static Vector4 ToVector4( Plane plane ) =>
-			new( plane.Normal.x, plane.Normal.y, plane.Normal.z, -plane.Distance );
+		static Vector4 ToVector4( Plane plane, float padding ) =>
+			new( plane.Normal.x, plane.Normal.y, plane.Normal.z, -plane.Distance + padding );
 	}
 
 	private void ReleaseBuffers()

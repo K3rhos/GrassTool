@@ -79,8 +79,11 @@ VS
 		float phase = GrassTime * GrassWindSpeed + blade.Phase * 6.28318531 + dot( blade.Position.xy, windDir ) * GrassWindWaveScale;
 		float wind = sin( phase ) * 0.7 + sin( phase * 2.3 + 1.7 ) * 0.3;
 
-		// Quadratic in t keeps the root planted while the tip carries the whole deflection.
-		float bendAmount = ( GrassBladeCurve + wind * GrassWindStrength ) * t * t;
+		// Quadratic in t keeps the root planted while the tip carries the whole deflection. Clamped
+		// because rise below is only meaningful for |bend| <= 1 - past that the blade stops being a
+		// bent blade and becomes a long sliver flung sideways, which is both wrong and a source of
+		// near-plane interpolation blowups when one lands in front of the camera.
+		float bendAmount = clamp( ( GrassBladeCurve + wind * GrassWindStrength ) * t * t, -1.0, 1.0 );
 
 		// Bending costs the blade height, otherwise it visibly stretches as it leans over.
 		float rise = sqrt( saturate( 1.0 - bendAmount * bendAmount ) );
@@ -154,8 +157,11 @@ PS
 
 	float4 MainPs( PixelInput i ) : SV_Target0
 	{
-		float t = i.vBladeCoords.x;
-		float tint = i.vBladeCoords.y;
+		// Saturated rather than used raw: a blade clipping the near plane makes perspective-correct
+		// interpolation push these well outside 0..1, and tint feeds a multiplier on albedo, so an
+		// out-of-range value there shows up as a blown-out white pixel.
+		float t = saturate( i.vBladeCoords.x );
+		float tint = saturate( i.vBladeCoords.y );
 
 		float3 albedo = lerp( GrassRootColor, GrassTipColor, t );
 		albedo *= lerp( 1.0 - GrassColorVariation, 1.0 + GrassColorVariation, tint );
@@ -174,11 +180,11 @@ PS
 		for ( uint index = 0; index < lightCount; index++ )
 		{
 			Light light = Light::From( worldPosition, i.vPositionSs, index );
-
+			
 			// Light::From resolves visibility through the screen-space mask; swap in a cascade-only
 			// value so the sun still casts real shadows on the grass without that contamination.
 			if ( light.LightData.Type == LightType::LightTypeDirectional )
-				light.Visibility = SunVisibility( worldPosition, i.vPositionSs.xy );
+                light.Visibility = SunVisibility(worldPosition, i.vPositionSs.xy);
 
 			float ndotl = dot( normalWs, light.Direction );
 
@@ -190,7 +196,7 @@ PS
 			diffuse += light.Color * light.Attenuation * light.Visibility * ( front + back );
 		}
 
-		float3 ambient = AmbientLight::From( worldPosition, i.vPositionSs, normalWs );
+        float3 ambient = AmbientLight::From(worldPosition, i.vPositionSs, normalWs);
 
 		float3 color = albedo * ( diffuse + ambient ) * occlusion;
 
