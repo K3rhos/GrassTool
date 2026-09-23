@@ -200,6 +200,10 @@ PS
 
 		float3 color = albedo * ( diffuse + ambient ) * occlusion;
 
-		return float4( color, 1.0f );
+		// The same call ShadingModelStandard::Shade ends on, so gradient, cubemap and volumetric fog
+		// all match the rest of the scene. Without it the grass stays saturated while everything
+		// around it fades into the distance. Costs nothing when the scene has no fog - it early-outs
+		// on g_bFogEnabled.
+		return DoAtmospherics( worldPosition, i.vPositionSs.xy, float4( color, 1.0f ) );
 	}
 }

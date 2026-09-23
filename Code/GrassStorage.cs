@@ -12,7 +12,8 @@ namespace RedSnail.GrassTool;
 /// </summary>
 public sealed class GrassStorage : BlobData
 {
-	public override int Version => 1;
+	// 2: cells are stored sparsely per chunk. See Serialize.
+	public override int Version => 2;
 
 	/// <summary>Cells along one edge of a chunk.</summary>
 	public const int ChunkResolution = 64;
@@ -195,6 +196,14 @@ public sealed class GrassStorage : BlobData
 			_chunks.Remove( coord );
 	}
 
+	/// <summary>
+	/// Writes only the painted cells. A chunk is 4096 cells at 8 bytes each, so storing them densely
+	/// cost 32KB per chunk however little of it was painted - a thin brush stroke across a landscape
+	/// touches a lot of chunks and paid full price for every one.
+	///
+	/// Each painted cell costs 2 bytes more than it did dense (its index), so a chunk past about 80%
+	/// coverage is cheaper stored densely. Both layouts are written and each chunk says which it used.
+	/// </summary>
 	public override void Serialize( ref Writer writer )
 	{
 		writer.Stream.Write( _chunks.Count );
@@ -204,8 +213,34 @@ public sealed class GrassStorage : BlobData
 			writer.Stream.Write( coord.X );
 			writer.Stream.Write( coord.Y );
 
+			var painted = 0;
 			for ( var i = 0; i < CellsPerChunk; i++ )
 			{
+				if ( (cells[i].Packed & 0xFF) != 0 ) painted++;
+			}
+
+			var sparse = painted * 10 < CellsPerChunk * 8;
+			writer.Stream.Write( sparse );
+
+			if ( !sparse )
+			{
+				for ( var i = 0; i < CellsPerChunk; i++ )
+				{
+					writer.Stream.Write( cells[i].Height );
+					writer.Stream.Write( cells[i].Packed );
+				}
+
+				continue;
+			}
+
+			writer.Stream.Write( painted );
+
+			for ( var i = 0; i < CellsPerChunk; i++ )
+			{
+				if ( (cells[i].Packed & 0xFF) == 0 )
+					continue;
+
+				writer.Stream.Write( (ushort)i );
 				writer.Stream.Write( cells[i].Height );
 				writer.Stream.Write( cells[i].Packed );
 			}
@@ -214,6 +249,59 @@ public sealed class GrassStorage : BlobData
 
 	public override void Deserialize( ref Reader reader )
 	{
+		_chunks.Clear();
+
+		var chunkCount = reader.Stream.Read<int>();
+
+		for ( var c = 0; c < chunkCount; c++ )
+		{
+			var coord = new ChunkCoord( reader.Stream.Read<int>(), reader.Stream.Read<int>() );
+			var cells = new Cell[CellsPerChunk];
+
+			if ( reader.Stream.Read<bool>() )
+			{
+				var painted = reader.Stream.Read<int>();
+
+				for ( var p = 0; p < painted; p++ )
+				{
+					var index = reader.Stream.Read<ushort>();
+					var height = reader.Stream.Read<float>();
+					var packed = reader.Stream.Read<uint>();
+
+					if ( index < CellsPerChunk )
+					{
+						cells[index].Height = height;
+						cells[index].Packed = packed;
+					}
+				}
+			}
+			else
+			{
+				for ( var i = 0; i < CellsPerChunk; i++ )
+				{
+					cells[i].Height = reader.Stream.Read<float>();
+					cells[i].Packed = reader.Stream.Read<uint>();
+				}
+			}
+
+			_chunks[coord] = cells;
+		}
+
+		Revision++;
+	}
+
+	/// <summary>
+	/// Version 1 wrote every cell of every chunk with no sparse/dense flag. Read it in that layout so
+	/// scenes painted before the change still load.
+	/// </summary>
+	public override void Upgrade( ref Reader reader, int fromVersion )
+	{
+		if ( fromVersion != 1 )
+		{
+			Deserialize( ref reader );
+			return;
+		}
+
 		_chunks.Clear();
 
 		var chunkCount = reader.Stream.Read<int>();
