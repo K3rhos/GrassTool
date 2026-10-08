@@ -11,9 +11,9 @@ namespace RedSnail.GrassTool.Editor;
 /// <see cref="GrassRenderer"/>'s density map, baking the surface height and normal under each
 /// cell so blades sit on whatever geometry is there. Hold Ctrl to erase.
 /// </summary>
-[EditorTool( "grass" )]
-[Title( "Grass" )]
-[Icon( "grass" )]
+[EditorTool("grass")]
+[Title("Grass")]
+[Icon("grass")]
 public sealed class GrassPaintTool : EditorTool
 {
 	public BrushSettings BrushSettings { get; private set; } = new();
@@ -36,25 +36,25 @@ public sealed class GrassPaintTool : EditorTool
 	public override Widget CreateToolSidebar()
 	{
 		var sidebar = new ToolSidebarWidget();
-		sidebar.AddTitle( "Grass Brush", "brush" );
+		sidebar.AddTitle("Grass Brush", "brush");
 		sidebar.MinimumWidth = 300;
 
 		{
-			var group = sidebar.AddGroup( "Brush" );
+			var group = sidebar.AddGroup("Brush");
 			var so = BrushSettings.GetSerialized();
-			group.Add( ControlSheet.CreateRow( so.GetProperty( nameof( BrushSettings.Size ) ) ) );
-			group.Add( ControlSheet.CreateRow( so.GetProperty( nameof( BrushSettings.Opacity ) ) ) );
+			group.Add(ControlSheet.CreateRow(so.GetProperty(nameof(BrushSettings.Size))));
+			group.Add(ControlSheet.CreateRow(so.GetProperty(nameof(BrushSettings.Opacity))));
 		}
 
 		{
-			var group = sidebar.AddGroup( "Actions" );
+			var group = sidebar.AddGroup("Actions");
 
-			var clear = new Button( "Clear All Grass", "delete_sweep" );
+			var clear = new Button("Clear All Grass", "delete_sweep");
 			clear.ToolTip = "Remove every painted cell from the target Grass Renderer";
 			clear.Clicked += () =>
 			{
 				var target = ResolveTarget();
-				if ( !target.IsValid() || target.Storage is null )
+				if (!target.IsValid() || target.Storage is null)
 					return;
 
 				// Wiping the density map throws away every stroke and there is no undo for it,
@@ -68,9 +68,9 @@ public sealed class GrassPaintTool : EditorTool
 					"Are you sure you want to delete all grass? This action cannot be undone.",
 					"Delete All Grass",
 					"Delete",
-					"Cancel" );
+					"Cancel");
 			};
-			group.Add( clear );
+			group.Add(clear);
 		}
 
 		// Soaks up the leftover height. Without it the column spreads the groups out to fill the
@@ -86,11 +86,11 @@ public sealed class GrassPaintTool : EditorTool
 
 		DrawBrushPreview();
 
-		Gizmo.Hitbox.BBox( BBox.FromPositionAndSize( Vector3.Zero, 999999 ) );
+		Gizmo.Hitbox.BBox(BBox.FromPositionAndSize(Vector3.Zero, 999999));
 
-		if ( Gizmo.IsLeftMouseDown )
+		if (Gizmo.IsLeftMouseDown)
 		{
-			if ( !_dragging )
+			if (!_dragging)
 			{
 				_dragging = true;
 				_lastPaintPosition = Vector3.Zero;
@@ -98,12 +98,12 @@ public sealed class GrassPaintTool : EditorTool
 
 			OnPaintUpdate();
 		}
-		else if ( _dragging )
+		else if (_dragging)
 		{
 			_dragging = false;
 			_lastPaintPosition = Vector3.Zero;
 
-			if ( _painted )
+			if (_painted)
 			{
 				ResolveTarget()?.MarkDirty();
 				_painted = false;
@@ -119,16 +119,16 @@ public sealed class GrassPaintTool : EditorTool
 	{
 		var selected = Selection
 			.OfType<GameObject>()
-			.Select( go => go.Components.Get<GrassRenderer>( FindMode.EnabledInSelfAndDescendants ) )
-			.FirstOrDefault( r => r.IsValid() );
+			.Select(go => go.Components.Get<GrassRenderer>(FindMode.EnabledInSelfAndDescendants))
+			.FirstOrDefault(r => r.IsValid());
 
-		if ( selected.IsValid() )
+		if (selected.IsValid())
 		{
 			_target = selected;
 			return _target;
 		}
 
-		if ( _target.IsValid() )
+		if (_target.IsValid())
 			return _target;
 
 		_target = Scene.GetAllComponents<GrassRenderer>().FirstOrDefault();
@@ -138,15 +138,15 @@ public sealed class GrassPaintTool : EditorTool
 	private void OnPaintUpdate()
 	{
 		var target = ResolveTarget();
-		if ( !target.IsValid() || target.Storage is null )
+		if (!target.IsValid() || target.Storage is null)
 			return;
 
 		var cursor = TraceCursor();
-		if ( !cursor.Hit )
+		if (!cursor.Hit)
 			return;
 
-		if ( _lastPaintPosition != Vector3.Zero &&
-			 Vector3.DistanceBetween( cursor.HitPosition, _lastPaintPosition ) < PaintStepDistance )
+		if (_lastPaintPosition != Vector3.Zero &&
+			 Vector3.DistanceBetween(cursor.HitPosition, _lastPaintPosition) < PaintStepDistance)
 			return;
 
 		_lastPaintPosition = cursor.HitPosition;
@@ -154,14 +154,14 @@ public sealed class GrassPaintTool : EditorTool
 		var radius = (float)BrushSettings.Size;
 		var strength = BrushSettings.Opacity;
 
-		if ( _erasing )
+		if (_erasing)
 		{
-			target.Storage.Erase( cursor.HitPosition, radius, strength );
+			target.Storage.Erase(cursor.HitPosition, radius, strength);
 			_painted = true;
 			return;
 		}
 
-		PaintCells( target, cursor.HitPosition, radius, strength );
+		PaintCells(target, cursor.HitPosition, radius, strength);
 		_painted = true;
 	}
 
@@ -169,22 +169,22 @@ public sealed class GrassPaintTool : EditorTool
 	/// Walks every density cell the brush touches and traces straight down onto the world to bake
 	/// the surface height and normal. Blades then follow whatever they were painted onto.
 	/// </summary>
-	private void PaintCells( GrassRenderer target, Vector3 center, float radius, float strength )
+	private void PaintCells(GrassRenderer target, Vector3 center, float radius, float strength)
 	{
 		var radiusSq = radius * radius;
 
-		var minX = (int)MathF.Floor( (center.x - radius) / GrassStorage.CellSize );
-		var maxX = (int)MathF.Floor( (center.x + radius) / GrassStorage.CellSize );
-		var minY = (int)MathF.Floor( (center.y - radius) / GrassStorage.CellSize );
-		var maxY = (int)MathF.Floor( (center.y + radius) / GrassStorage.CellSize );
+		var minX = (int)MathF.Floor((center.x - radius) / GrassStorage.CellSize);
+		var maxX = (int)MathF.Floor((center.x + radius) / GrassStorage.CellSize);
+		var minY = (int)MathF.Floor((center.y - radius) / GrassStorage.CellSize);
+		var maxY = (int)MathF.Floor((center.y + radius) / GrassStorage.CellSize);
 
 		// Enough headroom to find the surface from above without punching through overhangs the
 		// brush was never aimed at.
 		var traceHeight = radius + 512.0f;
 
-		for ( var cy = minY; cy <= maxY; cy++ )
+		for (var cy = minY; cy <= maxY; cy++)
 		{
-			for ( var cx = minX; cx <= maxX; cx++ )
+			for (var cx = minX; cx <= maxX; cx++)
 			{
 				var wx = (cx + 0.5f) * GrassStorage.CellSize;
 				var wy = (cy + 0.5f) * GrassStorage.CellSize;
@@ -192,52 +192,52 @@ public sealed class GrassPaintTool : EditorTool
 				var dx = wx - center.x;
 				var dy = wy - center.y;
 				var distSq = dx * dx + dy * dy;
-				if ( distSq > radiusSq )
+				if (distSq > radiusSq)
 					continue;
 
-				var from = new Vector3( wx, wy, center.z + traceHeight );
-				var to = new Vector3( wx, wy, center.z - traceHeight );
+				var from = new Vector3(wx, wy, center.z + traceHeight);
+				var to = new Vector3(wx, wy, center.z - traceHeight);
 
-				var tr = Scene.Trace.Ray( from, to )
-					.UseRenderMeshes( true )
-					.WithTag( "solid" )
+				var tr = Scene.Trace.Ray(from, to)
+					.UseRenderMeshes(true)
+					.WithTag("solid")
 					.Run();
 
-				if ( !tr.Hit )
+				if (!tr.Hit)
 					continue;
 
 				// Soft edge, so overlapping strokes build up smoothly instead of leaving a disc.
-				var falloff = 1.0f - MathF.Sqrt( distSq ) / radius;
-				var added = strength * MathF.Pow( falloff, 0.5f );
+				var falloff = 1.0f - MathF.Sqrt(distSq) / radius;
+				var added = strength * MathF.Pow(falloff, 0.5f);
 
-				var existing = target.Storage.GetCell( wx, wy ).Density;
-				var density = Math.Clamp( existing + added, 0.0f, 1.0f );
+				var existing = target.Storage.GetCell(wx, wy).Density;
+				var density = Math.Clamp(existing + added, 0.0f, 1.0f);
 
-				target.Storage.SetCell( wx, wy, density, tr.HitPosition.z, tr.Normal );
+				target.Storage.SetCell(wx, wy, density, tr.HitPosition.z, tr.Normal);
 			}
 		}
 	}
 
 	private SceneTraceResult TraceCursor() =>
-		Scene.Trace.Ray( Gizmo.CurrentRay, 100000 )
-			.UseRenderMeshes( true )
-			.WithTag( "solid" )
+		Scene.Trace.Ray(Gizmo.CurrentRay, 100000)
+			.UseRenderMeshes(true)
+			.WithTag("solid")
 			.Run();
 
 	private void DrawBrushPreview()
 	{
 		var tr = TraceCursor();
-		if ( !tr.Hit )
+		if (!tr.Hit)
 			return;
 
-		using ( Gizmo.Scope( "GrassBrush" ) )
+		using (Gizmo.Scope("GrassBrush"))
 		{
 			Gizmo.Draw.Color = _erasing
-				? Color.FromBytes( 250, 150, 150 )
-				: Color.FromBytes( 150, 250, 160 );
+				? Color.FromBytes(250, 150, 150)
+				: Color.FromBytes(150, 250, 160);
 
-			Gizmo.Draw.LineCircle( tr.HitPosition + tr.Normal * 1.0f, tr.Normal, BrushSettings.Size );
-			Gizmo.Draw.LineCircle( tr.HitPosition + tr.Normal * 1.0f, tr.Normal, BrushSettings.Size * 0.5f );
+			Gizmo.Draw.LineCircle(tr.HitPosition + tr.Normal * 1.0f, tr.Normal, BrushSettings.Size);
+			Gizmo.Draw.LineCircle(tr.HitPosition + tr.Normal * 1.0f, tr.Normal, BrushSettings.Size * 0.5f);
 		}
 	}
 }

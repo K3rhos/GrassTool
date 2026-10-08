@@ -30,7 +30,7 @@ public sealed class GrassStorage : BlobData
 	/// One density sample. Height and normal are baked when painting so grass sits on any
 	/// geometry, not just terrain. Matches the HLSL <c>GrassCell</c> struct exactly.
 	/// </summary>
-	[StructLayout( LayoutKind.Sequential )]
+	[StructLayout(LayoutKind.Sequential)]
 	public struct Cell
 	{
 		public float Height;
@@ -46,21 +46,21 @@ public sealed class GrassStorage : BlobData
 			{
 				var x = ((Packed >> 8) & 0xFF) / 127.5f - 1.0f;
 				var y = ((Packed >> 16) & 0xFF) / 127.5f - 1.0f;
-				var z = MathF.Sqrt( Math.Clamp( 1.0f - x * x - y * y, 0.0f, 1.0f ) );
-				return new Vector3( x, y, z );
+				var z = MathF.Sqrt(Math.Clamp(1.0f - x * x - y * y, 0.0f, 1.0f));
+				return new Vector3(x, y, z);
 			}
 		}
 
-		public static uint Pack( float density, Vector3 normal )
+		public static uint Pack(float density, Vector3 normal)
 		{
-			var d = (uint)Math.Clamp( density * 255.0f + 0.5f, 0.0f, 255.0f );
-			var nx = (uint)Math.Clamp( (normal.x + 1.0f) * 127.5f + 0.5f, 0.0f, 255.0f );
-			var ny = (uint)Math.Clamp( (normal.y + 1.0f) * 127.5f + 0.5f, 0.0f, 255.0f );
+			var d = (uint)Math.Clamp(density * 255.0f + 0.5f, 0.0f, 255.0f);
+			var nx = (uint)Math.Clamp((normal.x + 1.0f) * 127.5f + 0.5f, 0.0f, 255.0f);
+			var ny = (uint)Math.Clamp((normal.y + 1.0f) * 127.5f + 0.5f, 0.0f, 255.0f);
 			return d | (nx << 8) | (ny << 16);
 		}
 	}
 
-	public readonly record struct ChunkCoord( int X, int Y );
+	public readonly record struct ChunkCoord(int X, int Y);
 
 	private readonly Dictionary<ChunkCoord, Cell[]> _chunks = [];
 
@@ -71,18 +71,18 @@ public sealed class GrassStorage : BlobData
 
 	public IReadOnlyDictionary<ChunkCoord, Cell[]> Chunks => _chunks;
 
-	public static ChunkCoord WorldToChunk( Vector3 world ) => new(
-		(int)MathF.Floor( world.x / ChunkSize ),
-		(int)MathF.Floor( world.y / ChunkSize ) );
+	public static ChunkCoord WorldToChunk(Vector3 world) => new(
+		(int)MathF.Floor(world.x / ChunkSize),
+		(int)MathF.Floor(world.y / ChunkSize));
 
-	public static Vector2 ChunkOrigin( ChunkCoord coord ) => new( coord.X * ChunkSize, coord.Y * ChunkSize );
+	public static Vector2 ChunkOrigin(ChunkCoord coord) => new(coord.X * ChunkSize, coord.Y * ChunkSize);
 
 	/// <summary>Global cell index on an axis. Negative world positions floor correctly.</summary>
-	private static int WorldToCell( float world ) => (int)MathF.Floor( world / CellSize );
+	private static int WorldToCell(float world) => (int)MathF.Floor(world / CellSize);
 
-	private static int FloorDiv( int a, int b ) => a >= 0 ? a / b : ~(~a / b);
+	private static int FloorDiv(int a, int b) => a >= 0 ? a / b : ~(~a / b);
 
-	private static int Mod( int a, int b )
+	private static int Mod(int a, int b)
 	{
 		var r = a % b;
 		return r < 0 ? r + b : r;
@@ -92,70 +92,70 @@ public sealed class GrassStorage : BlobData
 	/// Writes a density sample at a world position, baking the surface height and normal alongside it.
 	/// Density of zero frees the sample.
 	/// </summary>
-	public void SetCell( float worldX, float worldY, float density, float height, Vector3 normal )
+	public void SetCell(float worldX, float worldY, float density, float height, Vector3 normal)
 	{
-		var cellX = WorldToCell( worldX );
-		var cellY = WorldToCell( worldY );
-		var coord = new ChunkCoord( FloorDiv( cellX, ChunkResolution ), FloorDiv( cellY, ChunkResolution ) );
+		var cellX = WorldToCell(worldX);
+		var cellY = WorldToCell(worldY);
+		var coord = new ChunkCoord(FloorDiv(cellX, ChunkResolution), FloorDiv(cellY, ChunkResolution));
 
-		if ( !_chunks.TryGetValue( coord, out var cells ) )
+		if (!_chunks.TryGetValue(coord, out var cells))
 		{
-			if ( density <= 0.0f ) return;
+			if (density <= 0.0f) return;
 
 			cells = new Cell[CellsPerChunk];
 			_chunks[coord] = cells;
 		}
 
-		var index = Mod( cellY, ChunkResolution ) * ChunkResolution + Mod( cellX, ChunkResolution );
-		cells[index] = new Cell { Height = height, Packed = Cell.Pack( density, normal ) };
+		var index = Mod(cellY, ChunkResolution) * ChunkResolution + Mod(cellX, ChunkResolution);
+		cells[index] = new Cell { Height = height, Packed = Cell.Pack(density, normal) };
 		Revision++;
 	}
 
-	public Cell GetCell( float worldX, float worldY )
+	public Cell GetCell(float worldX, float worldY)
 	{
-		var cellX = WorldToCell( worldX );
-		var cellY = WorldToCell( worldY );
-		var coord = new ChunkCoord( FloorDiv( cellX, ChunkResolution ), FloorDiv( cellY, ChunkResolution ) );
+		var cellX = WorldToCell(worldX);
+		var cellY = WorldToCell(worldY);
+		var coord = new ChunkCoord(FloorDiv(cellX, ChunkResolution), FloorDiv(cellY, ChunkResolution));
 
-		if ( !_chunks.TryGetValue( coord, out var cells ) )
+		if (!_chunks.TryGetValue(coord, out var cells))
 			return default;
 
-		return cells[Mod( cellY, ChunkResolution ) * ChunkResolution + Mod( cellX, ChunkResolution )];
+		return cells[Mod(cellY, ChunkResolution) * ChunkResolution + Mod(cellX, ChunkResolution)];
 	}
 
 	/// <summary>
 	/// Reduces density in a radius, removing samples that reach zero.
 	/// </summary>
-	public void Erase( Vector3 center, float radius, float strength )
+	public void Erase(Vector3 center, float radius, float strength)
 	{
 		var radiusSq = radius * radius;
-		var minCellX = WorldToCell( center.x - radius );
-		var maxCellX = WorldToCell( center.x + radius );
-		var minCellY = WorldToCell( center.y - radius );
-		var maxCellY = WorldToCell( center.y + radius );
+		var minCellX = WorldToCell(center.x - radius);
+		var maxCellX = WorldToCell(center.x + radius);
+		var minCellY = WorldToCell(center.y - radius);
+		var maxCellY = WorldToCell(center.y + radius);
 
-		for ( var cy = minCellY; cy <= maxCellY; cy++ )
+		for (var cy = minCellY; cy <= maxCellY; cy++)
 		{
-			for ( var cx = minCellX; cx <= maxCellX; cx++ )
+			for (var cx = minCellX; cx <= maxCellX; cx++)
 			{
-				var coord = new ChunkCoord( FloorDiv( cx, ChunkResolution ), FloorDiv( cy, ChunkResolution ) );
-				if ( !_chunks.TryGetValue( coord, out var cells ) )
+				var coord = new ChunkCoord(FloorDiv(cx, ChunkResolution), FloorDiv(cy, ChunkResolution));
+				if (!_chunks.TryGetValue(coord, out var cells))
 					continue;
 
 				var wx = (cx + 0.5f) * CellSize;
 				var wy = (cy + 0.5f) * CellSize;
 				var dx = wx - center.x;
 				var dy = wy - center.y;
-				if ( dx * dx + dy * dy > radiusSq )
+				if (dx * dx + dy * dy > radiusSq)
 					continue;
 
-				var index = Mod( cy, ChunkResolution ) * ChunkResolution + Mod( cx, ChunkResolution );
+				var index = Mod(cy, ChunkResolution) * ChunkResolution + Mod(cx, ChunkResolution);
 				ref var cell = ref cells[index];
-				if ( (cell.Packed & 0xFF) == 0 )
+				if ((cell.Packed & 0xFF) == 0)
 					continue;
 
-				var density = Math.Max( cell.Density - strength, 0.0f );
-				cell.Packed = density <= 0.0f ? 0u : Cell.Pack( density, cell.Normal );
+				var density = Math.Max(cell.Density - strength, 0.0f);
+				cell.Packed = density <= 0.0f ? 0u : Cell.Pack(density, cell.Normal);
 				Revision++;
 			}
 		}
@@ -165,7 +165,7 @@ public sealed class GrassStorage : BlobData
 
 	public void ClearAll()
 	{
-		if ( _chunks.Count == 0 ) return;
+		if (_chunks.Count == 0) return;
 
 		_chunks.Clear();
 		Revision++;
@@ -175,25 +175,25 @@ public sealed class GrassStorage : BlobData
 	{
 		List<ChunkCoord> empty = null;
 
-		foreach ( var (coord, cells) in _chunks )
+		foreach (var (coord, cells) in _chunks)
 		{
 			var used = false;
-			for ( var i = 0; i < cells.Length; i++ )
+			for (var i = 0; i < cells.Length; i++)
 			{
-				if ( (cells[i].Packed & 0xFF) != 0 ) { used = true; break; }
+				if ((cells[i].Packed & 0xFF) != 0) { used = true; break; }
 			}
 
-			if ( !used )
+			if (!used)
 			{
 				empty ??= [];
-				empty.Add( coord );
+				empty.Add(coord);
 			}
 		}
 
-		if ( empty is null ) return;
+		if (empty is null) return;
 
-		foreach ( var coord in empty )
-			_chunks.Remove( coord );
+		foreach (var coord in empty)
+			_chunks.Remove(coord);
 	}
 
 	/// <summary>
@@ -204,71 +204,71 @@ public sealed class GrassStorage : BlobData
 	/// Each painted cell costs 2 bytes more than it did dense (its index), so a chunk past about 80%
 	/// coverage is cheaper stored densely. Both layouts are written and each chunk says which it used.
 	/// </summary>
-	public override void Serialize( ref Writer writer )
+	public override void Serialize(ref Writer writer)
 	{
-		writer.Stream.Write( _chunks.Count );
+		writer.Stream.Write(_chunks.Count);
 
-		foreach ( var (coord, cells) in _chunks )
+		foreach (var (coord, cells) in _chunks)
 		{
-			writer.Stream.Write( coord.X );
-			writer.Stream.Write( coord.Y );
+			writer.Stream.Write(coord.X);
+			writer.Stream.Write(coord.Y);
 
 			var painted = 0;
-			for ( var i = 0; i < CellsPerChunk; i++ )
+			for (var i = 0; i < CellsPerChunk; i++)
 			{
-				if ( (cells[i].Packed & 0xFF) != 0 ) painted++;
+				if ((cells[i].Packed & 0xFF) != 0) painted++;
 			}
 
 			var sparse = painted * 10 < CellsPerChunk * 8;
-			writer.Stream.Write( sparse );
+			writer.Stream.Write(sparse);
 
-			if ( !sparse )
+			if (!sparse)
 			{
-				for ( var i = 0; i < CellsPerChunk; i++ )
+				for (var i = 0; i < CellsPerChunk; i++)
 				{
-					writer.Stream.Write( cells[i].Height );
-					writer.Stream.Write( cells[i].Packed );
+					writer.Stream.Write(cells[i].Height);
+					writer.Stream.Write(cells[i].Packed);
 				}
 
 				continue;
 			}
 
-			writer.Stream.Write( painted );
+			writer.Stream.Write(painted);
 
-			for ( var i = 0; i < CellsPerChunk; i++ )
+			for (var i = 0; i < CellsPerChunk; i++)
 			{
-				if ( (cells[i].Packed & 0xFF) == 0 )
+				if ((cells[i].Packed & 0xFF) == 0)
 					continue;
 
-				writer.Stream.Write( (ushort)i );
-				writer.Stream.Write( cells[i].Height );
-				writer.Stream.Write( cells[i].Packed );
+				writer.Stream.Write((ushort)i);
+				writer.Stream.Write(cells[i].Height);
+				writer.Stream.Write(cells[i].Packed);
 			}
 		}
 	}
 
-	public override void Deserialize( ref Reader reader )
+	public override void Deserialize(ref Reader reader)
 	{
 		_chunks.Clear();
 
 		var chunkCount = reader.Stream.Read<int>();
 
-		for ( var c = 0; c < chunkCount; c++ )
+		for (var c = 0; c < chunkCount; c++)
 		{
-			var coord = new ChunkCoord( reader.Stream.Read<int>(), reader.Stream.Read<int>() );
+			var coord = new ChunkCoord(reader.Stream.Read<int>(), reader.Stream.Read<int>());
 			var cells = new Cell[CellsPerChunk];
 
-			if ( reader.Stream.Read<bool>() )
+			if (reader.Stream.Read<bool>())
 			{
 				var painted = reader.Stream.Read<int>();
 
-				for ( var p = 0; p < painted; p++ )
+				for (var p = 0; p < painted; p++)
 				{
 					var index = reader.Stream.Read<ushort>();
 					var height = reader.Stream.Read<float>();
 					var packed = reader.Stream.Read<uint>();
 
-					if ( index < CellsPerChunk )
+					if (index < CellsPerChunk)
 					{
 						cells[index].Height = height;
 						cells[index].Packed = packed;
@@ -277,7 +277,7 @@ public sealed class GrassStorage : BlobData
 			}
 			else
 			{
-				for ( var i = 0; i < CellsPerChunk; i++ )
+				for (var i = 0; i < CellsPerChunk; i++)
 				{
 					cells[i].Height = reader.Stream.Read<float>();
 					cells[i].Packed = reader.Stream.Read<uint>();
@@ -294,11 +294,11 @@ public sealed class GrassStorage : BlobData
 	/// Version 1 wrote every cell of every chunk with no sparse/dense flag. Read it in that layout so
 	/// scenes painted before the change still load.
 	/// </summary>
-	public override void Upgrade( ref Reader reader, int fromVersion )
+	public override void Upgrade(ref Reader reader, int fromVersion)
 	{
-		if ( fromVersion != 1 )
+		if (fromVersion != 1)
 		{
-			Deserialize( ref reader );
+			Deserialize(ref reader);
 			return;
 		}
 
@@ -306,12 +306,12 @@ public sealed class GrassStorage : BlobData
 
 		var chunkCount = reader.Stream.Read<int>();
 
-		for ( var c = 0; c < chunkCount; c++ )
+		for (var c = 0; c < chunkCount; c++)
 		{
-			var coord = new ChunkCoord( reader.Stream.Read<int>(), reader.Stream.Read<int>() );
+			var coord = new ChunkCoord(reader.Stream.Read<int>(), reader.Stream.Read<int>());
 			var cells = new Cell[CellsPerChunk];
 
-			for ( var i = 0; i < CellsPerChunk; i++ )
+			for (var i = 0; i < CellsPerChunk; i++)
 			{
 				cells[i].Height = reader.Stream.Read<float>();
 				cells[i].Packed = reader.Stream.Read<uint>();

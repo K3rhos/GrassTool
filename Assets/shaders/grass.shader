@@ -155,6 +155,37 @@ PS
 		return DirectionalLightShadow::SampleCascade( cascade, worldPosition, screenPosition );
 	}
 
+	// The ambient the rest of the scene gets. AmbientLight::From can't be used as it is: once there is any DDGI volume in
+	// the scene it takes everything from DDGI, and gives whatever is outside every volume no ambient at all - pitch black
+	// wherever the sun doesn't reach. The engine's own shading (vr_lighting.fxc) asks per pixel instead: DDGI inside a
+	// volume, otherwise the baked probes if the scene has them, otherwise the reflection probes and the flat ambient.
+	float3 GrassAmbient( float3 worldPosition, float4 positionSs, float3 normalWs )
+	{
+		if ( DDGI::IsEnabled() )
+		{
+			DDGIVolume volume = DDGI::GetVolume( worldPosition );
+
+			if ( volume.IsValid() )
+				return DDGI::Evaluate( volume, worldPosition, normalWs, CalculatePositionToCameraDirWs( worldPosition ) );
+		}
+
+		if ( UsesBakedLightingFromProbe )
+			return AmbientLight::FromLightMapProbeVolume( worldPosition, normalWs );
+
+		return AmbientLight::FromEnvMapProbe( worldPosition, positionSs, normalWs );
+	}
+
+	// How much of a light a blade takes from its angle to it, with 'transmission' of it coming through from behind.
+	// Wrapped diffuse rather than saturate( ndotl ): a blade is not an opaque solid, and a hard terminator across a field
+	// of them reads as a mass of black edges.
+	float GrassLighting( float ndotl, float transmission )
+	{
+		float front = saturate( ( ndotl + GrassWrap ) / ( 1.0f + GrassWrap ) );
+		float back = saturate( -ndotl ) * transmission;
+
+		return front + back;
+	}
+
 	float4 MainPs( PixelInput i ) : SV_Target0
 	{
 		// Saturated rather than used raw: a blade clipping the near plane makes perspective-correct
@@ -176,6 +207,16 @@ PS
 
 		float3 diffuse = 0.0f;
 
+		// The sun. The engine lights it on its own rather than through the cluster's light list, which holds point and
+		// spot lights only - except on baked lighting, where it comes in with the baked lights in the loop below. The
+		// same split as ComputeDirectLighting in vr_lighting.fxc.
+		if ( g_DirectionalLightEnabled && !LightmappedLight::UsesLightmaps() && !ProbeLight::UsesProbes() )
+		{
+			float sunNdotL = dot( normalWs, -g_DirectionalLightDirection.xyz );
+
+			diffuse += g_DirectionalLightColor.rgb * SunVisibility( worldPosition, i.vPositionSs.xy ) * GrassLighting( sunNdotL, transmission );
+		}
+
 		uint lightCount = Light::Count( i.vPositionSs );
 		for ( uint index = 0; index < lightCount; index++ )
 		{
@@ -188,15 +229,10 @@ PS
 
 			float ndotl = dot( normalWs, light.Direction );
 
-			// Wrapped diffuse rather than saturate( ndotl ): a blade is not an opaque solid, and a
-			// hard terminator across a field of them reads as a mass of black edges.
-			float front = saturate( ( ndotl + GrassWrap ) / ( 1.0f + GrassWrap ) );
-			float back = saturate( -ndotl ) * transmission;
-
-			diffuse += light.Color * light.Attenuation * light.Visibility * ( front + back );
+			diffuse += light.Color * light.Attenuation * light.Visibility * GrassLighting( ndotl, transmission );
 		}
 
-        float3 ambient = AmbientLight::From(worldPosition, i.vPositionSs, normalWs);
+		float3 ambient = GrassAmbient( worldPosition, i.vPositionSs, normalWs );
 
 		float3 color = albedo * ( diffuse + ambient ) * occlusion;
 

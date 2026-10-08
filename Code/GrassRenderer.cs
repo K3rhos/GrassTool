@@ -12,10 +12,10 @@ namespace RedSnail.GrassTool;
 /// instances for whatever is near the camera, then a single indirect draw renders them all.
 /// No blade ever exists on the CPU, and nothing is stored per-blade in the scene.
 /// </summary>
-[Icon( "grass" ), Group( "Grass" ), Title( "Grass Renderer" )]
+[Icon("grass"), Group("Grass"), Title("Grass Renderer")]
 public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Component.DontExecuteOnServer
 {
-	[StructLayout( LayoutKind.Sequential )]
+	[StructLayout(LayoutKind.Sequential)]
 	private struct GpuChunk
 	{
 		public Vector2 Origin;
@@ -23,7 +23,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		public int Pad;
 	}
 
-	[StructLayout( LayoutKind.Sequential )]
+	[StructLayout(LayoutKind.Sequential)]
 	private struct GpuBlade
 	{
 		public Vector3 Position;
@@ -45,14 +45,14 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	// fixed at 4. Marshal.OffsetOf would express it directly but is outside the sandbox whitelist.
 	private const int ArgsInstanceCountOffset = 4;
 
-	[Property, Group( "General" )]
+	[Property, Group("General")]
 	public GrassDefinition Definition { get; set; }
 
 	/// <summary>
 	/// Ceiling on blades alive at once. Each costs 48 bytes of GPU memory, so 500k is ~24 MB.
 	/// Raise it if dense fields visibly clip out at the far edge of the render distance.
 	/// </summary>
-	[Property, Group( "General" ), Range( 50000, 4000000 )]
+	[Property, Group("General"), Range(50000, 4000000)]
 	public int MaxBlades { get; set; } = 500000;
 
 	/// <summary>
@@ -61,7 +61,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	/// blades that were never generated. Raise this if they visibly stream in at the screen edges,
 	/// which is most obvious at low or capped framerates.
 	/// </summary>
-	[Property, Group( "General" ), Range( 0, 4000 )]
+	[Property, Group("General"), Range(0, 4000)]
 	public float CullPadding { get; set; } = 1000.0f;
 
 	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
@@ -150,7 +150,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		// Culling follows whichever camera the viewport actually looks through, which is not
 		// necessarily the one replaying the list.
 		var cullCamera = GetCullCamera();
-		
+
 		if (!cullCamera.IsValid())
 			return;
 
@@ -183,7 +183,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		if (Scene.IsEditor)
 		{
 			var editorCamera = Application.Editor?.Camera;
-			
+
 			if (editorCamera.IsValid())
 				return editorCamera;
 		}
@@ -197,9 +197,9 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	/// </summary>
 	private void RefreshBuffers()
 	{
-		if ( Storage is null || Storage.ChunkCount == 0 )
+		if (Storage is null || Storage.ChunkCount == 0)
 		{
-			if ( _chunkCount != 0 )
+			if (_chunkCount != 0)
 			{
 				ReleaseBuffers();
 				_chunkCount = 0;
@@ -209,7 +209,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 			return;
 		}
 
-		if ( _uploadedVersion == Storage.Revision && _uploadedMaxBlades == MaxBlades && _chunkBuffer is not null )
+		if (_uploadedVersion == Storage.Revision && _uploadedMaxBlades == MaxBlades && _chunkBuffer is not null)
 			return;
 
 		ReleaseBuffers();
@@ -224,87 +224,87 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_chunkOrigins.Clear();
 
 		var index = 0;
-		foreach ( var (coord, cellData) in Storage.Chunks )
+		foreach (var (coord, cellData) in Storage.Chunks)
 		{
-			var origin = GrassStorage.ChunkOrigin( coord );
+			var origin = GrassStorage.ChunkOrigin(coord);
 			var offset = index * GrassStorage.CellsPerChunk;
 
 			chunks[index] = new GpuChunk { Origin = origin, CellOffset = offset };
-			Array.Copy( cellData, 0, cells, offset, GrassStorage.CellsPerChunk );
-			_chunkOrigins.Add( origin );
+			Array.Copy(cellData, 0, cells, offset, GrassStorage.CellsPerChunk);
+			_chunkOrigins.Add(origin);
 
 			index++;
 		}
 
-		_chunkBuffer = new GpuBuffer<GpuChunk>( _chunkCount, GpuBuffer.UsageFlags.Structured );
-		_chunkBuffer.SetData( chunks );
+		_chunkBuffer = new GpuBuffer<GpuChunk>(_chunkCount, GpuBuffer.UsageFlags.Structured);
+		_chunkBuffer.SetData(chunks);
 
-		_cellBuffer = new GpuBuffer<GrassStorage.Cell>( cells.Length, GpuBuffer.UsageFlags.Structured );
-		_cellBuffer.SetData( cells );
+		_cellBuffer = new GpuBuffer<GrassStorage.Cell>(cells.Length, GpuBuffer.UsageFlags.Structured);
+		_cellBuffer.SetData(cells);
 
-		_visibleChunkBuffer = new GpuBuffer<int>( _chunkCount, GpuBuffer.UsageFlags.Structured );
+		_visibleChunkBuffer = new GpuBuffer<int>(_chunkCount, GpuBuffer.UsageFlags.Structured);
 		_visibleScratch = new int[_chunkCount];
 
-		_frustumPlaneBuffer = new GpuBuffer<Vector4>( 6, GpuBuffer.UsageFlags.Structured );
+		_frustumPlaneBuffer = new GpuBuffer<Vector4>(6, GpuBuffer.UsageFlags.Structured);
 
-		_bladeBuffer = new GpuBuffer<GpuBlade>( MaxBlades, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append );
+		_bladeBuffer = new GpuBuffer<GpuBlade>(MaxBlades, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
 
-		_argsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>( 1, GpuBuffer.UsageFlags.IndirectDrawArguments );
-		_argsBuffer.SetData( new[]
+		_argsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>(1, GpuBuffer.UsageFlags.IndirectDrawArguments);
+		_argsBuffer.SetData(new[]
 		{
 			new GpuBuffer.IndirectDrawArguments { VertexCount = BladeVertexCount }
-		} );
+		});
 	}
 
-	private void RecordCommandList( CameraComponent camera )
+	private void RecordCommandList(CameraComponent camera)
 	{
 		_commandList.Reset();
 
-		if ( _chunkCount == 0 || _bladeBuffer is null )
+		if (_chunkCount == 0 || _bladeBuffer is null)
 			return;
 
 		var definition = Definition;
 		var cameraPosition = camera.WorldPosition;
 
-		var visibleCount = CollectVisibleChunks( cameraPosition, definition?.MaxDistance ?? 12000.0f );
-		if ( visibleCount == 0 )
+		var visibleCount = CollectVisibleChunks(cameraPosition, definition?.MaxDistance ?? 12000.0f);
+		if (visibleCount == 0)
 			return;
 
-		UploadFrustumPlanes( camera );
+		UploadFrustumPlanes(camera);
 
-		_commandList.Attributes.Set( "GrassChunks", _chunkBuffer );
-		_commandList.Attributes.Set( "GrassCells", _cellBuffer );
-		_commandList.Attributes.Set( "GrassVisibleChunks", _visibleChunkBuffer );
-		_commandList.Attributes.Set( "GrassFrustumPlanes", _frustumPlaneBuffer );
-		_commandList.Attributes.Set( "GrassBlades", _bladeBuffer );
-		_commandList.Attributes.Set( "GrassVisibleChunkCount", visibleCount );
-		_commandList.Attributes.Set( "GrassCameraPos", cameraPosition );
-		_commandList.Attributes.Set( "GrassTime", RealTime.Now );
+		_commandList.Attributes.Set("GrassChunks", _chunkBuffer);
+		_commandList.Attributes.Set("GrassCells", _cellBuffer);
+		_commandList.Attributes.Set("GrassVisibleChunks", _visibleChunkBuffer);
+		_commandList.Attributes.Set("GrassFrustumPlanes", _frustumPlaneBuffer);
+		_commandList.Attributes.Set("GrassBlades", _bladeBuffer);
+		_commandList.Attributes.Set("GrassVisibleChunkCount", visibleCount);
+		_commandList.Attributes.Set("GrassCameraPos", cameraPosition);
+		_commandList.Attributes.Set("GrassTime", RealTime.Now);
 
-		definition?.ApplyTo( _commandList.Attributes );
+		definition?.ApplyTo(_commandList.Attributes);
 
-		_commandList.ResourceBarrierTransition( _bladeBuffer, ResourceState.UnorderedAccess );
-		_commandList.SetCounterValue( _bladeBuffer, 0 );
+		_commandList.ResourceBarrierTransition(_bladeBuffer, ResourceState.UnorderedAccess);
+		_commandList.SetCounterValue(_bladeBuffer, 0);
 
-		_commandList.DispatchCompute( _generateShader, visibleCount * GrassStorage.CellsPerChunk, 1, 1 );
+		_commandList.DispatchCompute(_generateShader, visibleCount * GrassStorage.CellsPerChunk, 1, 1);
 
 		// The appends must all land before the counter is read into the draw arguments.
-		_commandList.UavBarrier( _bladeBuffer );
+		_commandList.UavBarrier(_bladeBuffer);
 
-		_commandList.ResourceBarrierTransition( _argsBuffer, ResourceState.CopyDestination );
-		_commandList.CopyStructureCount( _bladeBuffer, _argsBuffer, ArgsInstanceCountOffset );
+		_commandList.ResourceBarrierTransition(_argsBuffer, ResourceState.CopyDestination);
+		_commandList.CopyStructureCount(_bladeBuffer, _argsBuffer, ArgsInstanceCountOffset);
 
-		_commandList.ResourceBarrierTransition( _bladeBuffer, ResourceState.GenericRead );
-		_commandList.ResourceBarrierTransition( _argsBuffer, ResourceState.IndirectArgument );
+		_commandList.ResourceBarrierTransition(_bladeBuffer, ResourceState.GenericRead);
+		_commandList.ResourceBarrierTransition(_argsBuffer, ResourceState.IndirectArgument);
 
-		_commandList.DrawInstancedIndirect( _material, _argsBuffer );
+		_commandList.DrawInstancedIndirect(_material, _argsBuffer);
 	}
 
 	/// <summary>
 	/// Narrows the dispatch to chunks near the camera. Per-blade frustum culling happens on the
 	/// GPU; this only has to be conservative.
 	/// </summary>
-	private int CollectVisibleChunks( Vector3 cameraPosition, float maxDistance )
+	private int CollectVisibleChunks(Vector3 cameraPosition, float maxDistance)
 	{
 		// A chunk's near corner can be in range while its centre isn't, hence the circumradius.
 		var cullRadius = maxDistance + GrassStorage.ChunkSize * 0.7072f;
@@ -313,25 +313,25 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		var halfChunk = GrassStorage.ChunkSize * 0.5f;
 		var count = 0;
 
-		for ( var i = 0; i < _chunkOrigins.Count; i++ )
+		for (var i = 0; i < _chunkOrigins.Count; i++)
 		{
 			var origin = _chunkOrigins[i];
 			var dx = origin.x + halfChunk - cameraPosition.x;
 			var dy = origin.y + halfChunk - cameraPosition.y;
 
-			if ( dx * dx + dy * dy > cullRadiusSq )
+			if (dx * dx + dy * dy > cullRadiusSq)
 				continue;
 
 			_visibleScratch[count++] = i;
 		}
 
-		if ( count > 0 )
-			_visibleChunkBuffer.SetData( _visibleScratch.AsSpan( 0, count ) );
+		if (count > 0)
+			_visibleChunkBuffer.SetData(_visibleScratch.AsSpan(0, count));
 
 		return count;
 	}
 
-	private void UploadFrustumPlanes( CameraComponent camera )
+	private void UploadFrustumPlanes(CameraComponent camera)
 	{
 		var frustum = camera.GetFrustum();
 
@@ -341,24 +341,24 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		// rotating into view were culled before they were ever needed, which reads as them
 		// streaming in from the sides. The slack that buys scales with the frame time, so a capped
 		// or struggling framerate is exactly when it matters most.
-		var padding = MathF.Max( CullPadding, 0.0f );
+		var padding = MathF.Max(CullPadding, 0.0f);
 
 		// Plane.GetDistance is dot( point, Normal ) - Distance, so w is negated to let the shader
 		// use a plain dot( xyz, p ) + w. Adding the padding there slides the plane outward.
-		_planeScratch[0] = ToVector4( frustum.LeftPlane, padding );
-		_planeScratch[1] = ToVector4( frustum.RightPlane, padding );
-		_planeScratch[2] = ToVector4( frustum.TopPlane, padding );
-		_planeScratch[3] = ToVector4( frustum.BottomPlane, padding );
-		_planeScratch[4] = ToVector4( frustum.NearPlane, padding );
+		_planeScratch[0] = ToVector4(frustum.LeftPlane, padding);
+		_planeScratch[1] = ToVector4(frustum.RightPlane, padding);
+		_planeScratch[2] = ToVector4(frustum.TopPlane, padding);
+		_planeScratch[3] = ToVector4(frustum.BottomPlane, padding);
+		_planeScratch[4] = ToVector4(frustum.NearPlane, padding);
 
 		// The far plane is left tight - MaxDistance already governs the far edge, and padding it
 		// would only generate blades that fade out before they are ever visible.
-		_planeScratch[5] = ToVector4( frustum.FarPlane, 0.0f );
+		_planeScratch[5] = ToVector4(frustum.FarPlane, 0.0f);
 
-		_frustumPlaneBuffer.SetData( _planeScratch );
+		_frustumPlaneBuffer.SetData(_planeScratch);
 
-		static Vector4 ToVector4( Plane plane, float padding ) =>
-			new( plane.Normal.x, plane.Normal.y, plane.Normal.z, -plane.Distance + padding );
+		static Vector4 ToVector4(Plane plane, float padding) =>
+			new(plane.Normal.x, plane.Normal.y, plane.Normal.z, -plane.Distance + padding);
 	}
 
 	private void ReleaseBuffers()
@@ -392,18 +392,18 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 	protected override void DrawGizmos()
 	{
-		if ( !Gizmo.IsSelected || Storage is null || Storage.ChunkCount == 0 )
+		if (!Gizmo.IsSelected || Storage is null || Storage.ChunkCount == 0)
 			return;
 
-		Gizmo.Draw.Color = Color.Green.WithAlpha( 0.35f );
+		Gizmo.Draw.Color = Color.Green.WithAlpha(0.35f);
 
-		foreach ( var (coord, _) in Storage.Chunks )
+		foreach (var (coord, _) in Storage.Chunks)
 		{
-			var origin = GrassStorage.ChunkOrigin( coord );
-			var mins = new Vector3( origin.x, origin.y, 0 );
-			var maxs = new Vector3( origin.x + GrassStorage.ChunkSize, origin.y + GrassStorage.ChunkSize, 0 );
+			var origin = GrassStorage.ChunkOrigin(coord);
+			var mins = new Vector3(origin.x, origin.y, 0);
+			var maxs = new Vector3(origin.x + GrassStorage.ChunkSize, origin.y + GrassStorage.ChunkSize, 0);
 
-			Gizmo.Draw.LineBBox( new BBox( WorldTransform.PointToLocal( mins ), WorldTransform.PointToLocal( maxs ) ) );
+			Gizmo.Draw.LineBBox(new BBox(WorldTransform.PointToLocal(mins), WorldTransform.PointToLocal(maxs)));
 		}
 	}
 }
