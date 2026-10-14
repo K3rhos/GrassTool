@@ -155,6 +155,16 @@ PS
 		return DirectionalLightShadow::SampleCascade( cascade, worldPosition, screenPosition );
 	}
 
+	// What a pixel gets when DDGI does not cover it: the baked probes if the scene has them,
+	// otherwise the reflection probes and the flat ambient.
+	float3 GrassAmbientFallback( float3 worldPosition, float4 positionSs, float3 normalWs )
+	{
+		if ( UsesBakedLightingFromProbe )
+			return AmbientLight::FromLightMapProbeVolume( worldPosition, normalWs );
+
+		return AmbientLight::FromEnvMapProbe( worldPosition, positionSs, normalWs );
+	}
+
 	// The ambient the rest of the scene gets. AmbientLight::From can't be used as it is: once there is any DDGI volume in
 	// the scene it takes everything from DDGI, and gives whatever is outside every volume no ambient at all - pitch black
 	// wherever the sun doesn't reach. The engine's own shading (vr_lighting.fxc) asks per pixel instead: DDGI inside a
@@ -163,16 +173,18 @@ PS
 	{
 		if ( DDGI::IsEnabled() )
 		{
-			DDGIVolume volume = DDGI::GetVolume( worldPosition );
+			// EvaluateVolumes blends every volume covering the pixel and reports how much of it they
+			// account for in .a. Weighting the fallback by what is left over means a pixel at a
+			// volume's edge fades between the two instead of switching at the boundary.
+			float4 ddgi = DDGI::EvaluateVolumes( worldPosition, normalWs, CalculatePositionToCameraDirWs( worldPosition ) );
 
-			if ( volume.IsValid() )
-				return DDGI::Evaluate( volume, worldPosition, normalWs, CalculatePositionToCameraDirWs( worldPosition ) );
+			if ( ddgi.a >= 1.0f )
+				return ddgi.rgb;
+
+			return ddgi.rgb + GrassAmbientFallback( worldPosition, positionSs, normalWs ) * ( 1.0f - ddgi.a );
 		}
 
-		if ( UsesBakedLightingFromProbe )
-			return AmbientLight::FromLightMapProbeVolume( worldPosition, normalWs );
-
-		return AmbientLight::FromEnvMapProbe( worldPosition, positionSs, normalWs );
+		return GrassAmbientFallback( worldPosition, positionSs, normalWs );
 	}
 
 	// How much of a light a blade takes from its angle to it, with 'transmission' of it coming through from behind.
