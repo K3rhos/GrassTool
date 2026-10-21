@@ -1,7 +1,29 @@
+using System;
 using Sandbox;
 using Sandbox.Rendering;
 
 namespace RedSnail.GrassTool;
+
+/// <summary>
+/// How a grass instance is turned into geometry. Both styles share the entire generation pipeline -
+/// the painted density map, the slope limit, the distance thinning and the GPU culling - and differ
+/// only in what the vertex shader builds out of each instance.
+/// </summary>
+public enum GrassStyle
+{
+	/// <summary>
+	/// Procedural blades, bent and tapered on the GPU. Nothing to author, almost no overdraw, and
+	/// cheap enough for millions of them - but a blade is all it can ever look like.
+	/// </summary>
+	Blades,
+
+	/// <summary>
+	/// Textured cards crossed through each other, cut out of a sprite sheet. Far more convincing
+	/// for anything that is not a lawn, at the cost of real overdraw - which is why cards want a
+	/// much shorter <see cref="GrassDefinition.MaxDistance"/> than blades do.
+	/// </summary>
+	Sprites,
+}
 
 /// <summary>
 /// Look and behaviour of one grass layer. Shared by every <see cref="GrassRenderer"/> that
@@ -10,6 +32,14 @@ namespace RedSnail.GrassTool;
 [AssetType(Name = "Grass Definition", Extension = "grassdef", Category = "Grass")]
 public sealed class GrassDefinition : GameResource
 {
+	/// <summary>
+	/// Which geometry each instance becomes. Everything below applies to both styles except the
+	/// Sprite group, which is cards only, and Root/Tip Color, which blades only - a card takes its
+	/// colour from the sheet.
+	/// </summary>
+	[Property, Group("Style")]
+	public GrassStyle Style { get; set; } = GrassStyle.Blades;
+
 	[Property, Group("Density"), Range(1, 32)]
 	public int BladesPerCell { get; set; } = 8;
 
@@ -25,9 +55,18 @@ public sealed class GrassDefinition : GameResource
 	[Property, Group("Density"), Range(0, 1)]
 	public float SlopeLimit { get; set; } = 0.5f;
 
+	/// <summary>
+	/// How tall, before the distance thinning scales the last one of a cell down. For a sprite
+	/// card this is the height of the card itself.
+	/// </summary>
 	[Property, Group("Blade")]
 	public RangedFloat Height { get; set; } = new(16.0f, 30.0f);
 
+	/// <summary>
+	/// How wide. The default is blade-sized: a sprite card wants this close to <see cref="Height"/>
+	/// because the sprites are square, and left at a blade's width a card renders as a sliver.
+	/// Both come from the same random roll, so a large piece of grass is large in both directions.
+	/// </summary>
 	[Property, Group("Blade")]
 	public RangedFloat Width { get; set; } = new(1.5f, 2.5f);
 
@@ -87,6 +126,63 @@ public sealed class GrassDefinition : GameResource
 	[Property, Group("Wind")]
 	public float WindWaveScale { get; set; } = 0.0016f;
 
+	/// <summary>
+	/// Sheet the cards are cut from, read as a grid of <see cref="SpriteColumns"/> x
+	/// <see cref="SpriteRows"/> cells. Alpha is the cutout, so the sprites want a real alpha
+	/// channel rather than a matte painted into the colour.
+	/// </summary>
+	[Property, Group("Sprite")]
+	public Texture SpriteSheet { get; set; }
+
+	[Property, Group("Sprite"), Range(1, 16)]
+	public int SpriteColumns { get; set; } = 4;
+
+	[Property, Group("Sprite"), Range(1, 16)]
+	public int SpriteRows { get; set; } = 4;
+
+	/// <summary>
+	/// How many cells of the sheet actually hold a sprite. They are taken in reading order from the
+	/// top left and each card picks one at random, so a part-filled sheet needs this set to the
+	/// number of real sprites or cards will draw the empty cells.
+	/// </summary>
+	[Property, Group("Sprite"), Range(1, 64)]
+	public int SpriteCount { get; set; } = 4;
+
+	/// <summary>
+	/// Quads each card is built from, spread evenly over a half turn. Two is the classic cross and
+	/// is almost always the right answer; three covers more viewing angles for half as much again
+	/// in overdraw.
+	/// </summary>
+	[Property, Group("Sprite"), Range(1, 3)]
+	public int Planes { get; set; } = 2;
+
+	/// <summary>
+	/// Alpha below which a pixel of the sheet is thrown away. Cards are cut out rather than
+	/// blended, which is what lets thousands of them draw in any order - the trade is that this
+	/// threshold is a hard edge. Lower it if distant grass thins out, which is mipmapping eroding
+	/// the alpha channel.
+	/// </summary>
+	[Property, Group("Sprite"), Range(0, 1)]
+	public float AlphaCutoff { get; set; } = 0.35f;
+
+	/// <summary>
+	/// How much of the far end of <see cref="MaxDistance"/> cards fade in over, dithered per pixel.
+	/// This is also what hides grass streaming in, since a card entering range does so at the far
+	/// edge where it is fully faded out. Worth a good fraction of the render distance.
+	/// </summary>
+	[Property, Group("Sprite"), Range(0, 4000)]
+	public float CardFade { get; set; } = 800.0f;
+
+	/// <summary>Multiplies the sheet, for matching one set of sprites to a drier or greener scene.</summary>
+	[Property, Group("Sprite")]
+	public Color CardTint { get; set; } = Color.White;
+
+	/// <summary>Sprites the sheet really holds, clamped to the cells the grid actually has.</summary>
+	public int SpriteVariantCount => Math.Clamp(SpriteCount, 1, Math.Max(SpriteColumns, 1) * Math.Max(SpriteRows, 1));
+
+	/// <summary>Quads per card, clamped to what the shader's half-turn spread supports.</summary>
+	public int PlaneCount => Math.Clamp(Planes, 1, 3);
+
 	public void ApplyTo(CommandList.AttributeAccess attributes)
 	{
 		attributes.Set("GrassBladesPerCell", BladesPerCell);
@@ -111,6 +207,24 @@ public sealed class GrassDefinition : GameResource
 		attributes.Set("GrassWindStrength", WindStrength);
 		attributes.Set("GrassWindSpeed", WindSpeed);
 		attributes.Set("GrassWindWaveScale", WindWaveScale);
+
+		// The generation pass picks a sprite for every instance whichever style is drawing. One
+		// sprite means they all get variant zero, which is what blades read and ignore.
+		attributes.Set("GrassSpriteCount", Style == GrassStyle.Sprites ? SpriteVariantCount : 1);
+
+		if (Style != GrassStyle.Sprites)
+			return;
+
+		attributes.Set("GrassCardPlanes", PlaneCount);
+		attributes.Set("GrassSpriteColumns", SpriteColumns);
+		attributes.Set("GrassSpriteRows", SpriteRows);
+		attributes.Set("GrassCardFadeRange", CardFade);
+		attributes.Set("GrassAlphaCutoff", AlphaCutoff);
+		attributes.Set("GrassCardTint", (Vector3)CardTint);
+
+		// Magenta rather than nothing when the sheet is missing, so a half-configured definition is
+		// obvious at a glance instead of sampling whatever was left bound to the slot.
+		attributes.Set("GrassSpriteTexture", SpriteSheet ?? Texture.Invalid);
 	}
 
 	protected override Bitmap CreateAssetTypeIcon(int _Width, int _Height)

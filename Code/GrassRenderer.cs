@@ -33,12 +33,16 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		public float Width;
 		public float Tint;
 		public float Phase;
-		public float Pad; // keeps the struct at 48 bytes
+
+		// Which sprite of the sheet a card draws. Unused by blades, and it occupies what was
+		// padding, so the struct stays at 48 bytes either way.
+		public float Variant;
 	}
 
-	// Must match GRASS_BLADE_* in grass_shared.fxc.
+	// Must match GRASS_BLADE_* and GRASS_CARD_* in grass_shared.fxc.
 	private const int BladeStripVerts = 7;
 	private const int BladeVertexCount = (BladeStripVerts - 2) * 3;
+	private const int CardPlaneVertexCount = 6;
 
 	// Byte offset of InstanceCount within IndirectDrawArguments. The struct is sequential
 	// { uint VertexCount; uint InstanceCount; uint FirstVertex; uint FirstInstance; }, so this is
@@ -69,7 +73,8 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	public GrassStorage Storage { get; set; } = new();
 
 	private ComputeShader _generateShader;
-	private Material _material;
+	private Material _bladeMaterial;
+	private Material _spriteMaterial;
 	private CommandList _commandList;
 
 	private GpuBuffer<GpuChunk> _chunkBuffer;
@@ -87,13 +92,13 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	private int _chunkCount;
 	private int _uploadedVersion = -1;
 	private int _uploadedMaxBlades = -1;
+	private int _uploadedVertexCount = -1;
 
 	protected override void OnEnabled()
 	{
 		Storage ??= new GrassStorage();
 
 		_generateShader = new ComputeShader("grass_generate_cs");
-		_material = Material.FromShader("grass");
 		_commandList = new CommandList("Grass Rendering");
 
 		// Force a full re-upload: the buffers were released on disable, so a matching version
@@ -115,7 +120,8 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		ReleaseBuffers();
 
 		_generateShader = null;
-		_material = null;
+		_bladeMaterial = null;
+		_spriteMaterial = null;
 
 		_uploadedVersion = -1;
 		_uploadedMaxBlades = -1;
@@ -250,10 +256,10 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_bladeBuffer = new GpuBuffer<GpuBlade>(MaxBlades, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
 
 		_argsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>(1, GpuBuffer.UsageFlags.IndirectDrawArguments);
-		_argsBuffer.SetData(new[]
-		{
-			new GpuBuffer.IndirectDrawArguments { VertexCount = BladeVertexCount }
-		});
+
+		// The vertex count is written when the draw is recorded, which happens later this same
+		// frame - it depends on the style, and that can change without the painted data changing.
+		_uploadedVertexCount = -1;
 	}
 
 	private void RecordCommandList(CameraComponent camera)
@@ -269,6 +275,17 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		var visibleCount = CollectVisibleChunks(cameraPosition, definition?.MaxDistance ?? 12000.0f);
 		if (visibleCount == 0)
 			return;
+
+		var (material, vertexCount) = GetDrawSetup();
+
+		// The vertex count only changes when the style or the plane count does, so it is written
+		// then rather than every frame: an unconditional SetData here would be a CPU write racing
+		// the CopyStructureCount below, which fills in the instance count of the same struct.
+		if (vertexCount != _uploadedVertexCount)
+		{
+			_argsBuffer.SetData(new[] { new GpuBuffer.IndirectDrawArguments { VertexCount = (uint)vertexCount } });
+			_uploadedVertexCount = vertexCount;
+		}
 
 		UploadFrustumPlanes(camera);
 
@@ -297,7 +314,26 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_commandList.ResourceBarrierTransition(_bladeBuffer, ResourceState.GenericRead);
 		_commandList.ResourceBarrierTransition(_argsBuffer, ResourceState.IndirectArgument);
 
-		_commandList.DrawInstancedIndirect(_material, _argsBuffer);
+		_commandList.DrawInstancedIndirect(material, _argsBuffer);
+	}
+
+	/// <summary>
+	/// The material and per-instance vertex count the current style draws with. Both shaders read
+	/// the same instance buffer filled by the same generation pass; they differ only in what the
+	/// vertex stage builds out of each instance.
+	/// </summary>
+	private (Material Material, int VertexCount) GetDrawSetup()
+	{
+		var definition = Definition;
+
+		if (definition is not null && definition.Style == GrassStyle.Sprites)
+		{
+			_spriteMaterial ??= Material.FromShader("grass_sprite");
+			return (_spriteMaterial, definition.PlaneCount * CardPlaneVertexCount);
+		}
+
+		_bladeMaterial ??= Material.FromShader("grass");
+		return (_bladeMaterial, BladeVertexCount);
 	}
 
 	/// <summary>
@@ -383,6 +419,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		_chunkOrigins.Clear();
 		_chunkCount = 0;
+		_uploadedVertexCount = -1;
 	}
 
 	/// <summary>

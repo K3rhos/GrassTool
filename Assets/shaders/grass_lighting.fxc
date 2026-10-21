@@ -1,0 +1,115 @@
+#ifndef GRASS_LIGHTING_H
+#define GRASS_LIGHTING_H
+
+// The shading both grass styles use - procedural blades and sprite cards. Neither goes through
+// ShadingModelStandard::Shade: grass is thin, double-sided and translucent, and the standard model
+// has no term for light coming through from behind, which is most of what sells a backlit field.
+//
+// Every departure from the engine's own lighting path below was found the hard way, and the reason
+// is recorded with it. Include this from a PS block, after common/pixel.hlsl.
+
+#include "common/classes/Light.hlsl"
+#include "common/classes/AmbientLight.hlsl"
+
+float GrassWrap < Attribute( "GrassWrap" ); Default( 0.5 ); >;
+
+// Cascade shadows without the screen-space contact shadow mask that
+// DirectionalLightShadow::GetVisibility folds in. That mask is built from the depth prepass,
+// which this grass never takes part in, so at every piece of grass it holds the shadowing of
+// whatever geometry is behind it - the grass ends up wearing the silhouette of the background.
+float SunVisibility( float3 worldPosition, float2 screenPosition )
+{
+	if ( g_DirectionalLightCascadeCount == 0 )
+		return 1.0f;
+
+	// FindCascade is a free function in DirectionalLightShadow.hlsl, not a member of the struct.
+	float3 positionLs;
+	int cascade = FindCascade( worldPosition, positionLs );
+
+	if ( cascade < 0 )
+		return 1.0f;
+
+	return DirectionalLightShadow::SampleCascade( cascade, worldPosition, screenPosition );
+}
+
+// What a pixel gets when DDGI does not cover it: the baked probes if the scene has them,
+// otherwise the reflection probes and the flat ambient.
+float3 GrassAmbientFallback( float3 worldPosition, float4 positionSs, float3 normalWs )
+{
+	if ( UsesBakedLightingFromProbe )
+		return AmbientLight::FromLightMapProbeVolume( worldPosition, normalWs );
+
+	return AmbientLight::FromEnvMapProbe( worldPosition, positionSs, normalWs );
+}
+
+// The ambient the rest of the scene gets. AmbientLight::From can't be used as it is: once there is any DDGI volume in
+// the scene it takes everything from DDGI, and gives whatever is outside every volume no ambient at all - pitch black
+// wherever the sun doesn't reach. The engine's own shading (vr_lighting.fxc) asks per pixel instead: DDGI inside a
+// volume, otherwise the baked probes if the scene has them, otherwise the reflection probes and the flat ambient.
+float3 GrassAmbient( float3 worldPosition, float4 positionSs, float3 normalWs )
+{
+	if ( DDGI::IsEnabled() )
+	{
+		// EvaluateVolumes blends every volume covering the pixel and reports how much of it they
+		// account for in .a. Weighting the fallback by what is left over means a pixel at a
+		// volume's edge fades between the two instead of switching at the boundary.
+		float4 ddgi = DDGI::EvaluateVolumes( worldPosition, normalWs, CalculatePositionToCameraDirWs( worldPosition ) );
+
+		if ( ddgi.a >= 1.0f )
+			return ddgi.rgb;
+
+		return ddgi.rgb + GrassAmbientFallback( worldPosition, positionSs, normalWs ) * ( 1.0f - ddgi.a );
+	}
+
+	return GrassAmbientFallback( worldPosition, positionSs, normalWs );
+}
+
+// How much of a light a piece of grass takes from its angle to it, with 'transmission' of it coming through from behind.
+// Wrapped diffuse rather than saturate( ndotl ): grass is not an opaque solid, and a hard terminator across a field
+// of it reads as a mass of black edges.
+float GrassLighting( float ndotl, float transmission )
+{
+	float front = saturate( ( ndotl + GrassWrap ) / ( 1.0f + GrassWrap ) );
+	float back = saturate( -ndotl ) * transmission;
+
+	return front + back;
+}
+
+/// Everything that lands on a piece of grass. 'transmission' is how much light comes through it
+/// from behind and 'occlusion' the canopy shadowing; both are the caller's because a blade and a
+/// card fall off differently along their height.
+float3 GrassShade( float3 albedo, float3 normalWs, float3 worldPosition, float4 positionSs, float transmission, float occlusion )
+{
+	float3 diffuse = 0.0f;
+
+	// The sun. The engine lights it on its own rather than through the cluster's light list, which holds point and
+	// spot lights only - except on baked lighting, where it comes in with the baked lights in the loop below. The
+	// same split as ComputeDirectLighting in vr_lighting.fxc.
+	if ( g_DirectionalLightEnabled && !LightmappedLight::UsesLightmaps() && !ProbeLight::UsesProbes() )
+	{
+		float sunNdotL = dot( normalWs, -g_DirectionalLightDirection.xyz );
+
+		diffuse += g_DirectionalLightColor.rgb * SunVisibility( worldPosition, positionSs.xy ) * GrassLighting( sunNdotL, transmission );
+	}
+
+	uint lightCount = Light::Count( positionSs );
+	for ( uint index = 0; index < lightCount; index++ )
+	{
+		Light light = Light::From( worldPosition, positionSs, index );
+
+		// Light::From resolves visibility through the screen-space mask; swap in a cascade-only
+		// value so the sun still casts real shadows on the grass without that contamination.
+		if ( light.LightData.Type == LightType::LightTypeDirectional )
+			light.Visibility = SunVisibility( worldPosition, positionSs.xy );
+
+		float ndotl = dot( normalWs, light.Direction );
+
+		diffuse += light.Color * light.Attenuation * light.Visibility * GrassLighting( ndotl, transmission );
+	}
+
+	float3 ambient = GrassAmbient( worldPosition, positionSs, normalWs );
+
+	return albedo * ( diffuse + ambient ) * occlusion;
+}
+
+#endif // GRASS_LIGHTING_H

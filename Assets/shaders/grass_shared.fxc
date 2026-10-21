@@ -13,6 +13,10 @@
 #define GRASS_BLADE_STRIP_VERTS ( GRASS_BLADE_SEGMENTS * 2 + 1 )
 #define GRASS_BLADE_VERTS ( ( GRASS_BLADE_STRIP_VERTS - 2 ) * 3 )
 
+// Sprite cards are intersecting quads - two of them for the classic cross. Each quad is a pair
+// of triangles, so a card's vertex count is its plane count times this.
+#define GRASS_CARD_PLANE_VERTS 6
+
 struct GrassCell
 {
 	float Height;
@@ -35,7 +39,10 @@ struct GrassBlade
 	float Width;
 	float Tint;
 	float Phase;
-	float Pad; // keeps the struct at 48 bytes
+
+	// Which sprite of the sheet a card draws. Unused by blades, and it occupies what was padding,
+	// so the struct stays at 48 bytes either way.
+	float Variant;
 };
 
 #endif // GRASS_SHARED_H

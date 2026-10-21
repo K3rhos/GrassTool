@@ -39,6 +39,9 @@ CS
 	float2 GrassBladeHeight < Attribute( "GrassBladeHeight" ); >;
 	float2 GrassBladeWidth < Attribute( "GrassBladeWidth" ); >;
 
+	// Sprites on the sheet. One for the blade style, which has no sheet and ignores the variant.
+	int GrassSpriteCount < Attribute( "GrassSpriteCount" ); Default( 1 ); >;
+
 	uint HashU( uint x )
 	{
 		x ^= x >> 16;
@@ -138,6 +141,7 @@ CS
 			float rSize = HashF( s ^ 0x1b56c4e9u );
 			float rTint = HashF( s ^ 0x3c6ef372u );
 			float rPhase = HashF( s ^ 0x7f4a7c15u );
+			float rVariant = HashF( s ^ 0x5bd1e995u );
 
 			float2 xy = cellMin + float2( rx, ry ) * GRASS_CELL_SIZE;
 			float2 offset = xy - cellCenter;
@@ -148,10 +152,12 @@ CS
 			float scale = ( i == count - 1 ) ? lastBladeScale : 1.0;
 
 			float height = lerp( GrassBladeHeight.x, GrassBladeHeight.y, rSize ) * scale;
+			float width = lerp( GrassBladeWidth.x, GrassBladeWidth.y, rSize ) * scale;
 
-			// Test the blade's midpoint with a radius covering its full extent, so a blade
-			// leaning into view at the screen edge isn't culled.
-			if ( !SphereInFrustum( float3( xy, z + height * 0.5 ), height ) )
+			// Test the midpoint with a radius covering the full extent, so one leaning into view at
+			// the screen edge isn't culled. Width only matters for sprite cards, which are as wide
+			// as they are tall - a blade is a sliver, so for those this is the height as before.
+			if ( !SphereInFrustum( float3( xy, z + height * 0.5 ), max( height, width ) ) )
 				continue;
 
 			GrassBlade blade;
@@ -159,10 +165,14 @@ CS
 			blade.Yaw = rYaw * 6.28318531;
 			blade.Normal = groundNormal;
 			blade.Height = height;
-			blade.Width = lerp( GrassBladeWidth.x, GrassBladeWidth.y, rSize ) * scale;
+			blade.Width = width;
 			blade.Tint = rTint;
 			blade.Phase = rPhase;
-			blade.Pad = 0;
+
+			// HashF never reaches 1, so this lands in 0 .. count-1; the min is belt and braces
+			// against a sprite count the material doesn't actually have.
+			int variantCount = max( GrassSpriteCount, 1 );
+			blade.Variant = min( floor( rVariant * variantCount ), (float)( variantCount - 1 ) );
 
 			GrassBlades.Append( blade );
 		}
