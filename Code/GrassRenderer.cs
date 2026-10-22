@@ -58,6 +58,25 @@ public sealed class GrassLayer
 [Icon("grass"), Group("Grass"), Title("Grass Renderer")]
 public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Component.DontExecuteOnServer
 {
+	/// <summary>
+	/// Lets a game steer the grass from its own code, without changing this library: implement it on
+	/// any component in the same scene as the renderer.
+	/// </summary>
+	public interface IEvents : ISceneEvent<IEvents>
+	{
+		/// <summary>
+		/// Asked every frame for each layer about to draw. Scale <paramref name="size"/> to shrink the
+		/// layer's grass - height and width together, blades and cards alike - or to grow it. It
+		/// starts at 1, which draws the grass as painted; at 0 the layer is skipped outright, with no
+		/// generation pass and no draw, so grass that is meant to be gone costs nothing. With several
+		/// listeners, each one gets the value the previous one left, so multiplying keeps them all.
+		///
+		/// Snow is the case it was made for: shrink the grass as the snow deepens, and at full depth
+		/// it is buried and stops drawing at all.
+		/// </summary>
+		void OnGrassSize(GrassRenderer renderer, GrassLayer layer, ref float size) { }
+	}
+
 	[StructLayout(LayoutKind.Sequential)]
 	private struct GpuChunk
 	{
@@ -197,6 +216,12 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 	private CameraComponent _lastCamera;
 	private int _uploadedCapacity = -1;
+
+	// The size question put to IEvents listeners, kept in fields so asking it every frame doesn't
+	// allocate a fresh closure each time.
+	private Action<IEvents> _askSize;
+	private GrassLayer _sizeLayer;
+	private float _size;
 
 	protected override void OnAwake()
 	{
@@ -467,6 +492,10 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		if (layer is null || !layer.Enabled || state.ChunkCount == 0)
 			return;
 
+		var size = AskSize(layer);
+		if (size <= 0.0f)
+			return;
+
 		var definition = layer.Definition;
 
 		var visibleCount = CollectVisibleChunks(state, cameraPosition, definition?.MaxDistance ?? 12000.0f);
@@ -509,6 +538,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_commandList.Attributes.Set("GrassSeed", layer.Seed);
 		_commandList.Attributes.Set("GrassSpriteVariants", state.SpriteBuffer);
 		_commandList.Attributes.Set("GrassSpriteCount", state.UploadedSprites.Count);
+		_commandList.Attributes.Set("GrassSizeScale", size);
 
 		definition?.ApplyTo(_commandList.Attributes);
 
@@ -527,6 +557,23 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_commandList.ResourceBarrierTransition(state.ArgsBuffer, ResourceState.IndirectArgument);
 
 		_commandList.DrawInstancedIndirect(material, state.ArgsBuffer);
+	}
+
+	/// <summary>
+	/// How big the game wants this layer's grass right now, from <see cref="IEvents.OnGrassSize"/>:
+	/// 1 when nothing listens, never below 0. Asked of this renderer's own scene, since in the editor
+	/// the active scene can be another one.
+	/// </summary>
+	private float AskSize(GrassLayer layer)
+	{
+		_sizeLayer = layer;
+		_size = 1.0f;
+
+		Scene.RunEvent(_askSize ??= listener => listener.OnGrassSize(this, _sizeLayer, ref _size));
+
+		_sizeLayer = null;
+
+		return MathF.Max(_size, 0.0f);
 	}
 
 	/// <summary>

@@ -95,3 +95,23 @@ Only one renderer is allowed per scene — a second one removes itself on awake 
 console, since layers are the way to have more than one kind of grass. A renderer painted before
 layers existed migrates into its first layer on load, keeping its definition and everything painted
 into it.
+# 🔌Hooks
+
+`GrassRenderer.IEvents` lets a game steer the grass from its own code, without changing the library.
+Implement it on any component in the same scene as the renderer:
+
+```csharp
+public sealed class SnowGrass : Component, GrassRenderer.IEvents
+{
+	void GrassRenderer.IEvents.OnGrassSize( GrassRenderer renderer, GrassLayer layer, ref float size )
+	{
+		size *= 1.0f - SnowDepth; // 0..1: the grass sinks into the snow, and is gone at full depth
+	}
+}
+```
+
+- **OnGrassSize** is asked every frame for each layer about to draw. Scale `size` to shrink the
+  layer's grass — height and width together, blades and cards alike — or to grow it. It starts at
+  1, which draws the grass as painted. At 0 the layer is skipped outright, with no generation pass
+  and no draw, so grass that is meant to be gone costs nothing. With several listeners each one gets
+  the value the previous one left, so multiply rather than assign.

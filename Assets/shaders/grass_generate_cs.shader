@@ -39,6 +39,11 @@ CS
 	float2 GrassBladeHeight < Attribute( "GrassBladeHeight" ); >;
 	float2 GrassBladeWidth < Attribute( "GrassBladeWidth" ); >;
 
+	// Scales the whole layer's grass, height and width together: what the game asked for through
+	// GrassRenderer.IEvents.OnGrassSize. 1 draws it as painted. The renderer skips the layer itself
+	// at 0, so this never has to deal with grass that is gone.
+	float GrassSizeScale < Attribute( "GrassSizeScale" ); Default( 1.0 ); >;
+
 	// Which cells of the sheet this layer draws from, as a table of grid indices, and how many
 	// entries it holds. A table rather than a count because a definition can cherry-pick cells -
 	// 3, 4, 5 here and 7, 8, 10 there - so one sheet serves several of them.
@@ -156,7 +161,7 @@ CS
 
 			// Only the final blade of the cell is partial, so a cell's blade count grows one
 			// blade at a time and each one scales up from zero as the camera closes in.
-			float scale = ( i == count - 1 ) ? lastBladeScale : 1.0;
+			float scale = ( ( i == count - 1 ) ? lastBladeScale : 1.0 ) * GrassSizeScale;
 
 			float height = lerp( GrassBladeHeight.x, GrassBladeHeight.y, rSize ) * scale;
 			float width = lerp( GrassBladeWidth.x, GrassBladeWidth.y, rSize ) * scale;
