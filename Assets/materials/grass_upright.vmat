@@ -8,6 +8,6 @@ Layer0
 	g_bFogEnabled "1"
 
 	//---- Sprite ----
-	SpriteSheetAlpha "textures/grass_upright_alpha.png"
-	SpriteSheetColor "textures/grass_upright_rgb.png"
+	SpriteSheetAlpha "textures/grass_placeholder_upright_alpha.png"
+	SpriteSheetColor "textures/grass_placeholder_upright_rgb.png"
 }

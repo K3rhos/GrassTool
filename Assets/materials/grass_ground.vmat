@@ -13,6 +13,6 @@ Layer0
 	//---- Sprite ----
 	g_flGroundLift "1.000"
 	g_flGroundTilt "6.000"
-	SpriteSheetAlpha "textures/grass_ground_alpha.png"
-	SpriteSheetColor "textures/grass_ground_rgb.png"
+	SpriteSheetAlpha "textures/grass_placeholder_ground_alpha.png"
+	SpriteSheetColor "textures/grass_placeholder_ground_rgb.png"
 }
