@@ -53,11 +53,16 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	public GrassDefinition Definition { get; set; }
 
 	/// <summary>
-	/// Ceiling on blades alive at once. Each costs 48 bytes of GPU memory, so 500k is ~24 MB.
-	/// Raise it if dense fields visibly clip out at the far edge of the render distance.
+	/// How many instances the buffer has room for, at 48 bytes each - so a million is ~48 MB.
+	///
+	/// This is capacity, not a budget: how much grass there is, is decided by the render distance
+	/// and the density, and this only needs to be big enough to hold the result. Set it too low and
+	/// the generation overruns it, at which point which grass gets a slot is settled by whichever
+	/// GPU thread reaches the counter first - an order that changes every frame, so patches flicker
+	/// in and out. Turn on <see cref="TrackInstanceCount"/> to see how close to it you run.
 	/// </summary>
-	[Property, Group("General"), Range(50000, 4000000)]
-	public int MaxBlades { get; set; } = 500000;
+	[Property, Group("General"), Range(50000, 8000000), Alias("MaxBlades")]
+	public int MaxGrassObjects { get; set; } = 1000000;
 
 	/// <summary>
 	/// How far outside the camera frustum blades are still generated, in world units. Culling is
@@ -68,13 +73,33 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	[Property, Group("General"), Range(0, 4000)]
 	public float CullPadding { get; set; } = 1000.0f;
 
+	/// <summary>
+	/// Reads the instance count back off the GPU, filling in <see cref="LiveInstanceCount"/>. Off
+	/// by default, because the read waits for the GPU to answer - worth turning on while you are
+	/// hunting a problem, not worth leaving on.
+	/// </summary>
+	[Property, Group("Diagnostics")]
+	public bool TrackInstanceCount { get; set; }
+
+	/// <summary>
+	/// Instances the generation pass produced, as of the last readback. Needs
+	/// <see cref="TrackInstanceCount"/> switched on, and lags by a frame.
+	///
+	/// If this reaches <see cref="MaxGrassObjects"/> the buffer is full, and which grass gets a slot is
+	/// then settled by whichever GPU thread reaches the counter first. That order changes every
+	/// frame, so whole patches flicker in and out, and the instances that found no slot read back
+	/// as zeros. Raise <see cref="MaxGrassObjects"/>, or bring the render distance or density down, until
+	/// this has headroom.
+	/// </summary>
+	[Property, Group("Diagnostics"), ReadOnly]
+	public int LiveInstanceCount { get; private set; }
+
 	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
 	[Property, Hide]
 	public GrassStorage Storage { get; set; } = new();
 
 	private ComputeShader _generateShader;
 	private Material _bladeMaterial;
-	private Material _spriteMaterial;
 	private CommandList _commandList;
 
 	private GpuBuffer<GpuChunk> _chunkBuffer;
@@ -91,8 +116,13 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	private CameraComponent _lastCamera;
 	private int _chunkCount;
 	private int _uploadedVersion = -1;
-	private int _uploadedMaxBlades = -1;
+	private int _uploadedCapacity = -1;
 	private int _uploadedVertexCount = -1;
+
+	private readonly GpuBuffer.IndirectDrawArguments[] _countScratch = new GpuBuffer.IndirectDrawArguments[1];
+	private TimeSince _sinceCountRead;
+	private bool _warnedAboutCapacity;
+	private bool _warnedAboutMaterial;
 
 	protected override void OnEnabled()
 	{
@@ -104,7 +134,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		// Force a full re-upload: the buffers were released on disable, so a matching version
 		// number here would otherwise leave the compute pass reading freed resources.
 		_uploadedVersion = -1;
-		_uploadedMaxBlades = -1;
+		_uploadedCapacity = -1;
 
 		RefreshBuffers();
 	}
@@ -121,10 +151,12 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		_generateShader = null;
 		_bladeMaterial = null;
-		_spriteMaterial = null;
 
 		_uploadedVersion = -1;
-		_uploadedMaxBlades = -1;
+		_uploadedCapacity = -1;
+
+		_warnedAboutCapacity = false;
+		LiveInstanceCount = 0;
 	}
 
 	protected override void OnUpdate()
@@ -162,6 +194,55 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		RefreshBuffers();
 		RecordCommandList(cullCamera);
+		ReadInstanceCount();
+	}
+
+	/// <summary>
+	/// Reads the instance count back off the GPU, so a full buffer shows up as a number instead of
+	/// as grass that flickers for no visible reason.
+	///
+	/// Synchronous, so it waits for the GPU - hence opt-in and throttled rather than every frame.
+	/// The async read would not need the wait, but it has to be issued from inside a render
+	/// context, and a component's Update is not one.
+	/// </summary>
+	private void ReadInstanceCount()
+	{
+		if (!TrackInstanceCount || _argsBuffer is null || _sinceCountRead < 0.5f)
+			return;
+
+		_sinceCountRead = 0.0f;
+
+		try
+		{
+			_argsBuffer.GetData(_countScratch.AsSpan());
+		}
+		catch (Exception e)
+		{
+			// A diagnostic that throws once a frame forever is worse than no diagnostic.
+			TrackInstanceCount = false;
+			Log.Warning($"{nameof(GrassRenderer)}: couldn't read the instance count back, so tracking is off. {e.Message}");
+			return;
+		}
+
+		LiveInstanceCount = (int)_countScratch[0].InstanceCount;
+
+		// Re-arms once there is headroom again, so changing a setting and regressing says so a
+		// second time rather than staying quiet.
+		if (LiveInstanceCount < MaxGrassObjects)
+		{
+			_warnedAboutCapacity = false;
+			return;
+		}
+
+		if (_warnedAboutCapacity)
+			return;
+
+		_warnedAboutCapacity = true;
+
+		Log.Warning($"{nameof(GrassRenderer)}: the instance buffer is full at {MaxGrassObjects:n0}. " +
+			"Grass will flicker as patches compete for slots, because which of them gets one is " +
+			"decided by the GPU afresh every frame. Raise Max Blades, or lower Max Distance or " +
+			"Blades Per Cell.");
 	}
 
 	/// <summary>
@@ -215,14 +296,14 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 			return;
 		}
 
-		if (_uploadedVersion == Storage.Revision && _uploadedMaxBlades == MaxBlades && _chunkBuffer is not null)
+		if (_uploadedVersion == Storage.Revision && _uploadedCapacity == MaxGrassObjects && _chunkBuffer is not null)
 			return;
 
 		ReleaseBuffers();
 
 		_chunkCount = Storage.ChunkCount;
 		_uploadedVersion = Storage.Revision;
-		_uploadedMaxBlades = MaxBlades;
+		_uploadedCapacity = MaxGrassObjects;
 
 		var chunks = new GpuChunk[_chunkCount];
 		var cells = new GrassStorage.Cell[_chunkCount * GrassStorage.CellsPerChunk];
@@ -253,7 +334,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		_frustumPlaneBuffer = new GpuBuffer<Vector4>(6, GpuBuffer.UsageFlags.Structured);
 
-		_bladeBuffer = new GpuBuffer<GpuBlade>(MaxBlades, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
+		_bladeBuffer = new GpuBuffer<GpuBlade>(MaxGrassObjects, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
 
 		_argsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>(1, GpuBuffer.UsageFlags.IndirectDrawArguments);
 
@@ -277,6 +358,22 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 			return;
 
 		var (material, vertexCount) = GetDrawSetup();
+
+		if (material is null)
+		{
+			if (!_warnedAboutMaterial)
+			{
+				_warnedAboutMaterial = true;
+				Log.Warning($"{nameof(GrassRenderer)}: the grass definition is set to Sprites but names no " +
+					"Sprite Material, so there is nothing to draw with. Assign a material using the " +
+					"grass_sprite shader, with the sprite sheet in its Color slot and a greyscale " +
+					"image of the cutout in its Alpha slot.");
+			}
+
+			return;
+		}
+
+		_warnedAboutMaterial = false;
 
 		// The vertex count only changes when the style or the plane count does, so it is written
 		// then rather than every frame: an unconditional SetData here would be a CPU write racing
@@ -326,11 +423,10 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	{
 		var definition = Definition;
 
+		// Sprite cards draw with the material the definition names, because that is what carries
+		// the sheet. Null until one is assigned, and the caller skips the draw.
 		if (definition is not null && definition.Style == GrassStyle.Sprites)
-		{
-			_spriteMaterial ??= Material.FromShader("grass_sprite");
-			return (_spriteMaterial, definition.PlaneCount * CardPlaneVertexCount);
-		}
+			return (definition.SpriteMaterial, definition.PlaneCount * CardPlaneVertexCount);
 
 		_bladeMaterial ??= Material.FromShader("grass");
 		return (_bladeMaterial, BladeVertexCount);

@@ -127,12 +127,20 @@ public sealed class GrassDefinition : GameResource
 	public float WindWaveScale { get; set; } = 0.0016f;
 
 	/// <summary>
-	/// Sheet the cards are cut from, read as a grid of <see cref="SpriteColumns"/> x
-	/// <see cref="SpriteRows"/> cells. Alpha is the cutout, so the sprites want a real alpha
-	/// channel rather than a matte painted into the colour.
+	/// Material the cards are drawn with: one using the <c>grass_sprite</c> shader, with the sprite
+	/// sheet in its Color slot and a greyscale image of the cutout in its Alpha slot. Both are read
+	/// as a grid of <see cref="SpriteColumns"/> x <see cref="SpriteRows"/> cells.
+	///
+	/// The cutout has to be its own image. Pointing the Alpha slot at an RGBA sheet reads its
+	/// luminance rather than its alpha channel, which gives every card a solid rectangle with the
+	/// plant cut out of it.
+	///
+	/// The sheet travels in a material rather than being handed to the shader directly because
+	/// that is what the engine's texture streaming watches. A texture passed straight as a render
+	/// attribute is invisible to it, and gets its mips evicted out from under the draw.
 	/// </summary>
 	[Property, Group("Sprite")]
-	public Texture SpriteSheet { get; set; }
+	public Material SpriteMaterial { get; set; }
 
 	[Property, Group("Sprite"), Range(1, 16)]
 	public int SpriteColumns { get; set; } = 4;
@@ -221,10 +229,6 @@ public sealed class GrassDefinition : GameResource
 		attributes.Set("GrassCardFadeRange", CardFade);
 		attributes.Set("GrassAlphaCutoff", AlphaCutoff);
 		attributes.Set("GrassCardTint", (Vector3)CardTint);
-
-		// Magenta rather than nothing when the sheet is missing, so a half-configured definition is
-		// obvious at a glance instead of sampling whatever was left bound to the slot.
-		attributes.Set("GrassSpriteTexture", SpriteSheet ?? Texture.Invalid);
 	}
 
 	protected override Bitmap CreateAssetTypeIcon(int _Width, int _Height)

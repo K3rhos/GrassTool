@@ -25,8 +25,20 @@ instance becomes:
 ## Setting up sprite grass
 
 1. Set `Style` to `Sprites` on the grass definition
-2. Drop a sheet into `Sprite > Sprite Sheet`. The included `Assets/textures/grass_sprites.png` is a
-   4x4 grid holding 4 sprites in its top row, which is what the Columns/Rows/Count defaults expect
+2. Drop a material into `Sprite > Sprite Material`. `Assets/materials/grass_sprites.vmat` is ready
+   to go with the included sheets; to use your own, copy it and point the two slots at your images.
+
+   The cutout needs its own greyscale image, separate from the colour one — here that is
+   `grass_sprites_rgb.png` and `grass_sprites_alpha.png`. An RGBA image in the Alpha slot is read
+   for its luminance rather than its alpha, and every card comes out a solid rectangle with the
+   plant cut out of it.
+
+   The sheet also has to travel in a material rather than being handed to the shader from C#.
+   Texture streaming works out which mips to keep from what it sees materials using, so a texture
+   passed straight as a render attribute is invisible to it and has its mips evicted out from under
+   the draw — the cards go soft and slightly dark until something touches the asset again.
+
+   The included sheets are a 4x4 grid of 16 sprites, so set `Sprite Count` to 16.
 3. Give it card-sized numbers, because the defaults are blade-sized:
    - `Blade > Width` close to `Blade > Height` — the sprites are square, and left at a blade's
      width a card renders as a sliver

@@ -151,7 +151,21 @@ PS
 
 	#include "grass_lighting.fxc"
 
-	CreateTexture2D( g_tGrassSprites ) < Attribute( "GrassSpriteTexture" ); SrgbRead( true ); Filter( ANISOTROPIC ); AddressU( CLAMP ); AddressV( CLAMP ); >;
+	// The sheet comes from the material, not from a render attribute. A texture handed straight to
+	// an attribute sits outside the bookkeeping the engine hangs off materials: texture streaming
+	// never sees it being used, so it evicts the top mips out from under the draw and the cards go
+	// soft and dark until something touches the asset again.
+	//
+	// The cutout needs its own greyscale image rather than the alpha channel of the colour one. A
+	// scalar input reads an image's luminance, so pointing this at an RGBA sheet does not fail
+	// loudly - it quietly gives every card a solid rectangle with the plant cut out of it.
+	CreateInputTexture2D( SpriteSheetColor, Srgb, 8, "", "_color", "Sprite,10/10", Default3( 1.0, 1.0, 1.0 ) );
+	CreateInputTexture2D( SpriteSheetAlpha, Linear, 8, "", "_alpha", "Sprite,10/20", Default( 1.0 ) );
+
+	Texture2D g_tGrassSprites < Channel( RGB, Box( SpriteSheetColor ), Srgb ); Channel( A, Box( SpriteSheetAlpha ), Linear ); OutputFormat( BC7 ); SrgbRead( true ); >;
+
+	// Clamped, so filtering at a tile's edge cannot wrap around to the far side of the sheet.
+	SamplerState g_sGrassSprites < Filter( ANISOTROPIC ); MaxAniso( 8 ); AddressU( CLAMP ); AddressV( CLAMP ); >;
 
 	float3 GrassCardTint < Attribute( "GrassCardTint" ); Default3( 1, 1, 1 ); >;
 	float GrassColorVariation < Attribute( "GrassColorVariation" ); Default( 0.25 ); >;
@@ -168,7 +182,7 @@ PS
 		float tint = saturate( i.vCardCoords.y );
 		float fade = saturate( i.vCardCoords.z );
 
-		float4 sheet = Tex2D( g_tGrassSprites, i.vTextureCoords.xy );
+		float4 sheet = Tex2DS( g_tGrassSprites, g_sGrassSprites, i.vTextureCoords.xy );
 
 		// Interleaved gradient noise: one line, and far less structured than an ordered matrix, so
 		// the fade reads as grain rather than a crawling grid. Either test discards - the sprite's
