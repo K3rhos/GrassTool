@@ -42,6 +42,10 @@ CS
 	// Sprites on the sheet. One for the blade style, which has no sheet and ignores the variant.
 	int GrassSpriteCount < Attribute( "GrassSpriteCount" ); Default( 1 ); >;
 
+	// Decorrelates one layer from another. Every random choice below comes from hashing the cell's
+	// position, so without this two layers painted over the same ground land in the same spots.
+	int GrassSeed < Attribute( "GrassSeed" ); Default( 0 ); >;
+
 	uint HashU( uint x )
 	{
 		x ^= x >> 16;
@@ -125,7 +129,7 @@ CS
 		float partial = exactCount - floor( exactCount );
 		float lastBladeScale = ( partial > 0.0 ) ? partial : 1.0;
 
-		uint seed = HashU( asuint( cellMin.x ) ) ^ HashU( asuint( cellMin.y ) * 7919u );
+		uint seed = HashU( asuint( cellMin.x ) ) ^ HashU( asuint( cellMin.y ) * 7919u ) ^ HashU( asuint( GrassSeed ) * 2654435761u );
 
 		// Plane through the cell centre, so blades follow the slope instead of stair-stepping
 		// at cell boundaries. Avoids fetching neighbouring cells entirely.

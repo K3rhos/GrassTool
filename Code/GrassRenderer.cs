@@ -8,9 +8,52 @@ using RenderStage = Sandbox.Rendering.Stage;
 namespace RedSnail.GrassTool;
 
 /// <summary>
-/// Renders a painted grass field. Each frame a compute pass expands the density map into blade
-/// instances for whatever is near the camera, then a single indirect draw renders them all.
-/// No blade ever exists on the CPU, and nothing is stored per-blade in the scene.
+/// One kind of grass on a renderer: what it looks like, and where it has been painted. Layers are
+/// painted independently and overlap freely, so ground cover can sit under tall grass rather than
+/// competing with it for the same cells.
+/// </summary>
+public sealed class GrassLayer
+{
+	/// <summary>What the brush calls this layer. Only ever shown in the editor.</summary>
+	[Property]
+	public string Name { get; set; } = "Grass";
+
+	[Property]
+	public GrassDefinition Definition { get; set; }
+
+	/// <summary>Stops the layer drawing without throwing away what has been painted into it.</summary>
+	[Property]
+	public bool Enabled { get; set; } = true;
+
+	/// <summary>
+	/// Decorrelates this layer's placement from the others. Every random choice a cell makes -
+	/// where its grass sits, which way it faces, how big it is, which sprite it takes - comes from
+	/// hashing the cell's position, so two layers painted over the same ground with the same seed
+	/// put their grass in exactly the same spots.
+	///
+	/// A new layer picks a random one, which is almost always what you want. Set two layers to the
+	/// same seed deliberately and they will line up, which is occasionally useful - flowers that
+	/// always sit in the same tufts as the grass, say.
+	/// </summary>
+	[Property]
+	public int Seed { get; set; } = 0;
+
+	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
+	[Property, Hide]
+	public GrassStorage Storage { get; set; } = new();
+
+	[Hide] public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "Unnamed" : Name;
+}
+
+/// <summary>
+/// Renders painted grass. Each frame a compute pass expands the density map into instances for
+/// whatever is near the camera, then one indirect draw renders them. No blade ever exists on the
+/// CPU, and nothing is stored per-blade in the scene.
+///
+/// A renderer holds any number of <see cref="GrassLayer"/>s - tall grass, ground cover, whatever -
+/// each with its own definition, material and painted coverage. They share one instance buffer and
+/// run one after another, so adding a layer costs a dispatch and a draw rather than a second
+/// allocation of the whole budget.
 /// </summary>
 [Icon("grass"), Group("Grass"), Title("Grass Renderer")]
 public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Component.DontExecuteOnServer
@@ -39,6 +82,49 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		public float Variant;
 	}
 
+	/// <summary>
+	/// The GPU side of one layer. Chunks and cells are its own painted data; the args buffer is its
+	/// own because the vertex count per instance follows the layer's style. Everything else - the
+	/// instance buffer, the frustum, the camera - is shared across layers.
+	/// </summary>
+	private sealed class LayerState
+	{
+		public GrassLayer Source;
+
+		public GpuBuffer<GpuChunk> ChunkBuffer;
+		public GpuBuffer<GrassStorage.Cell> CellBuffer;
+		public GpuBuffer<int> VisibleChunkBuffer;
+		public GpuBuffer<GpuBuffer.IndirectDrawArguments> ArgsBuffer;
+
+		public readonly List<Vector2> ChunkOrigins = [];
+		public int[] VisibleScratch = [];
+
+		public int ChunkCount;
+		public int UploadedVersion = -1;
+		public int UploadedVertexCount = -1;
+		public bool WarnedAboutMaterial;
+
+		public void Release()
+		{
+			ChunkBuffer?.Dispose();
+			ChunkBuffer = null;
+
+			CellBuffer?.Dispose();
+			CellBuffer = null;
+
+			VisibleChunkBuffer?.Dispose();
+			VisibleChunkBuffer = null;
+
+			ArgsBuffer?.Dispose();
+			ArgsBuffer = null;
+
+			ChunkOrigins.Clear();
+			ChunkCount = 0;
+			UploadedVersion = -1;
+			UploadedVertexCount = -1;
+		}
+	}
+
 	// Must match GRASS_BLADE_* and GRASS_CARD_* in grass_shared.fxc.
 	private const int BladeStripVerts = 7;
 	private const int BladeVertexCount = (BladeStripVerts - 2) * 3;
@@ -49,11 +135,16 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	// fixed at 4. Marshal.OffsetOf would express it directly but is outside the sandbox whitelist.
 	private const int ArgsInstanceCountOffset = 4;
 
-	[Property, Group("General")]
-	public GrassDefinition Definition { get; set; }
+	/// <summary>
+	/// The kinds of grass this renderer draws. The brush paints whichever one is picked in the Grass
+	/// tool's sidebar, so each layer keeps its own coverage and they can overlap.
+	/// </summary>
+	[Property, Group("Layers")]
+	public List<GrassLayer> Layers { get; set; } = [new GrassLayer()];
 
 	/// <summary>
-	/// How many instances the buffer has room for, at 48 bytes each - so a million is ~48 MB.
+	/// How many instances the buffer has room for, at 48 bytes each - so a million is ~48 MB. Every
+	/// layer draws out of this one buffer, so it has to fit the largest single layer, not their sum.
 	///
 	/// This is capacity, not a budget: how much grass there is, is decided by the render distance
 	/// and the density, and this only needs to be big enough to hold the result. Set it too low and
@@ -65,54 +156,64 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	public int MaxGrassObjects { get; set; } = 1000000;
 
 	/// <summary>
-	/// How far outside the camera frustum blades are still generated, in world units. Culling is
+	/// How far outside the camera frustum grass is still generated, in world units. Culling is
 	/// done against the frustum as it was when the frame started, so turning the camera brings in
-	/// blades that were never generated. Raise this if they visibly stream in at the screen edges,
+	/// grass that was never generated. Raise this if it visibly streams in at the screen edges,
 	/// which is most obvious at low or capped framerates.
 	/// </summary>
 	[Property, Group("General"), Range(0, 4000)]
 	public float CullPadding { get; set; } = 1000.0f;
 
-	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
+	/// <summary>
+	/// Where a renderer kept its definition before it had layers. Still deserialized so that scenes
+	/// built before the change migrate into the first layer instead of coming back empty.
+	/// </summary>
 	[Property, Hide]
-	public GrassStorage Storage { get; set; } = new();
+	public GrassDefinition Definition { get; set; }
+
+	/// <summary>Painted coverage from before layers. Migrated into the first layer on load.</summary>
+	[Property, Hide]
+	public GrassStorage Storage { get; set; }
 
 	private ComputeShader _generateShader;
 	private Material _bladeMaterial;
 	private CommandList _commandList;
 
-	private GpuBuffer<GpuChunk> _chunkBuffer;
-	private GpuBuffer<GrassStorage.Cell> _cellBuffer;
-	private GpuBuffer<int> _visibleChunkBuffer;
 	private GpuBuffer<Vector4> _frustumPlaneBuffer;
 	private GpuBuffer<GpuBlade> _bladeBuffer;
-	private GpuBuffer<GpuBuffer.IndirectDrawArguments> _argsBuffer;
 
-	private readonly List<Vector2> _chunkOrigins = [];
-	private int[] _visibleScratch = [];
+	private readonly List<LayerState> _layerStates = [];
 	private readonly Vector4[] _planeScratch = new Vector4[6];
 
 	private CameraComponent _lastCamera;
-	private int _chunkCount;
-	private int _uploadedVersion = -1;
 	private int _uploadedCapacity = -1;
-	private int _uploadedVertexCount = -1;
 
-	private bool _warnedAboutMaterial;
+	protected override void OnAwake()
+	{
+		var existing = Scene.Get<GrassRenderer>();
+
+		if (!existing.IsValid() || existing == this)
+			return;
+
+		Log.Warning($"Only one {nameof(GrassRenderer)} can exist in a scene: the one added to \"{GameObject.Name}\" has been removed. Use the one on \"{existing.GameObject.Name}\". Add a layer to it instead of a second renderer.");
+
+		Destroy();
+	}
 
 	protected override void OnEnabled()
 	{
-		Storage ??= new GrassStorage();
+		Layers ??= [];
+		MigrateSingleLayer();
 
 		_generateShader = new ComputeShader("grass_generate_cs");
 		_commandList = new CommandList("Grass Rendering");
 
 		// Force a full re-upload: the buffers were released on disable, so a matching version
 		// number here would otherwise leave the compute pass reading freed resources.
-		_uploadedVersion = -1;
 		_uploadedCapacity = -1;
 
-		RefreshBuffers();
+		foreach (var state in _layerStates)
+			state.UploadedVersion = -1;
 	}
 
 	protected override void OnDisabled()
@@ -128,8 +229,36 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_generateShader = null;
 		_bladeMaterial = null;
 
-		_uploadedVersion = -1;
 		_uploadedCapacity = -1;
+	}
+
+	/// <summary>
+	/// Moves a pre-layers renderer's definition and coverage into the first layer. Runs once: the
+	/// old storage is dropped afterwards, so a second pass has nothing left to find.
+	/// </summary>
+	private void MigrateSingleLayer()
+	{
+		if (Storage is null || Storage.ChunkCount == 0)
+		{
+			Definition = null;
+			Storage = null;
+			return;
+		}
+
+		if (Layers.Count == 0)
+			Layers.Add(new GrassLayer());
+
+		var first = Layers[0];
+
+		// Only claim a layer that has nothing of its own to lose.
+		if (first.Storage is null || first.Storage.ChunkCount == 0)
+		{
+			first.Storage = Storage;
+			first.Definition ??= Definition;
+		}
+
+		Definition = null;
+		Storage = null;
 	}
 
 	protected override void OnUpdate()
@@ -186,7 +315,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	}
 
 	/// <summary>
-	/// The camera the blades are generated for. While editing this is the viewport camera, or
+	/// The camera the grass is generated for. While editing this is the viewport camera, or
 	/// nothing outside the game camera's frustum would ever be generated.
 	/// </summary>
 	private CameraComponent GetCullCamera()
@@ -203,121 +332,169 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	}
 
 	/// <summary>
-	/// Re-packs painted chunks into GPU buffers. Skipped entirely unless the painted data or the
-	/// blade budget actually changed.
+	/// Brings the per-layer GPU state in line with the layer list, then re-packs any layer whose
+	/// painted data changed. Layers that did not change cost nothing here.
 	/// </summary>
 	private void RefreshBuffers()
 	{
-		if (Storage is null || Storage.ChunkCount == 0)
-		{
-			if (_chunkCount != 0)
-			{
-				ReleaseBuffers();
-				_chunkCount = 0;
-			}
+		Layers ??= [];
 
-			_uploadedVersion = Storage?.Revision ?? -1;
+		// Layers can be added, removed or reordered in the inspector at any time.
+		while (_layerStates.Count > Layers.Count)
+		{
+			_layerStates[^1].Release();
+			_layerStates.RemoveAt(_layerStates.Count - 1);
+		}
+
+		while (_layerStates.Count < Layers.Count)
+			_layerStates.Add(new LayerState());
+
+		var capacityChanged = _uploadedCapacity != MaxGrassObjects;
+
+		if (capacityChanged || _bladeBuffer is null)
+		{
+			_bladeBuffer?.Dispose();
+			_bladeBuffer = new GpuBuffer<GpuBlade>(MaxGrassObjects, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
+			_uploadedCapacity = MaxGrassObjects;
+		}
+
+		_frustumPlaneBuffer ??= new GpuBuffer<Vector4>(6, GpuBuffer.UsageFlags.Structured);
+
+		for (var i = 0; i < Layers.Count; i++)
+			RefreshLayer(Layers[i], _layerStates[i]);
+	}
+
+	private void RefreshLayer(GrassLayer layer, LayerState state)
+	{
+		var storage = layer?.Storage;
+
+		// A layer the inspector swapped out from under us keeps none of its old upload.
+		if (!ReferenceEquals(state.Source, layer))
+		{
+			state.Release();
+			state.Source = layer;
+		}
+
+		if (storage is null || storage.ChunkCount == 0)
+		{
+			if (state.ChunkCount != 0)
+				state.Release();
+
+			state.UploadedVersion = storage?.Revision ?? -1;
 			return;
 		}
 
-		if (_uploadedVersion == Storage.Revision && _uploadedCapacity == MaxGrassObjects && _chunkBuffer is not null)
+		if (state.UploadedVersion == storage.Revision && state.ChunkBuffer is not null)
 			return;
 
-		ReleaseBuffers();
+		state.Release();
+		state.Source = layer;
 
-		_chunkCount = Storage.ChunkCount;
-		_uploadedVersion = Storage.Revision;
-		_uploadedCapacity = MaxGrassObjects;
+		state.ChunkCount = storage.ChunkCount;
+		state.UploadedVersion = storage.Revision;
 
-		var chunks = new GpuChunk[_chunkCount];
-		var cells = new GrassStorage.Cell[_chunkCount * GrassStorage.CellsPerChunk];
-
-		_chunkOrigins.Clear();
+		var chunks = new GpuChunk[state.ChunkCount];
+		var cells = new GrassStorage.Cell[state.ChunkCount * GrassStorage.CellsPerChunk];
 
 		var index = 0;
-		foreach (var (coord, cellData) in Storage.Chunks)
+		foreach (var (coord, cellData) in storage.Chunks)
 		{
 			var origin = GrassStorage.ChunkOrigin(coord);
 			var offset = index * GrassStorage.CellsPerChunk;
 
 			chunks[index] = new GpuChunk { Origin = origin, CellOffset = offset };
 			Array.Copy(cellData, 0, cells, offset, GrassStorage.CellsPerChunk);
-			_chunkOrigins.Add(origin);
+			state.ChunkOrigins.Add(origin);
 
 			index++;
 		}
 
-		_chunkBuffer = new GpuBuffer<GpuChunk>(_chunkCount, GpuBuffer.UsageFlags.Structured);
-		_chunkBuffer.SetData(chunks);
+		state.ChunkBuffer = new GpuBuffer<GpuChunk>(state.ChunkCount, GpuBuffer.UsageFlags.Structured);
+		state.ChunkBuffer.SetData(chunks);
 
-		_cellBuffer = new GpuBuffer<GrassStorage.Cell>(cells.Length, GpuBuffer.UsageFlags.Structured);
-		_cellBuffer.SetData(cells);
+		state.CellBuffer = new GpuBuffer<GrassStorage.Cell>(cells.Length, GpuBuffer.UsageFlags.Structured);
+		state.CellBuffer.SetData(cells);
 
-		_visibleChunkBuffer = new GpuBuffer<int>(_chunkCount, GpuBuffer.UsageFlags.Structured);
-		_visibleScratch = new int[_chunkCount];
+		state.VisibleChunkBuffer = new GpuBuffer<int>(state.ChunkCount, GpuBuffer.UsageFlags.Structured);
+		state.VisibleScratch = new int[state.ChunkCount];
 
-		_frustumPlaneBuffer = new GpuBuffer<Vector4>(6, GpuBuffer.UsageFlags.Structured);
-
-		_bladeBuffer = new GpuBuffer<GpuBlade>(MaxGrassObjects, GpuBuffer.UsageFlags.Structured | GpuBuffer.UsageFlags.Append);
-
-		_argsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>(1, GpuBuffer.UsageFlags.IndirectDrawArguments);
+		state.ArgsBuffer = new GpuBuffer<GpuBuffer.IndirectDrawArguments>(1, GpuBuffer.UsageFlags.IndirectDrawArguments);
 
 		// The vertex count is written when the draw is recorded, which happens later this same
 		// frame - it depends on the style, and that can change without the painted data changing.
-		_uploadedVertexCount = -1;
+		state.UploadedVertexCount = -1;
 	}
 
 	private void RecordCommandList(CameraComponent camera)
 	{
 		_commandList.Reset();
 
-		if (_chunkCount == 0 || _bladeBuffer is null)
+		if (_bladeBuffer is null || Layers.Count == 0)
 			return;
 
-		var definition = Definition;
 		var cameraPosition = camera.WorldPosition;
 
-		var visibleCount = CollectVisibleChunks(cameraPosition, definition?.MaxDistance ?? 12000.0f);
+		UploadFrustumPlanes(camera);
+
+		// Shared by every layer: one camera, one frustum, one instance buffer.
+		_commandList.Attributes.Set("GrassFrustumPlanes", _frustumPlaneBuffer);
+		_commandList.Attributes.Set("GrassBlades", _bladeBuffer);
+		_commandList.Attributes.Set("GrassCameraPos", cameraPosition);
+		_commandList.Attributes.Set("GrassTime", RealTime.Now);
+
+		for (var i = 0; i < Layers.Count; i++)
+			RecordLayer(Layers[i], _layerStates[i], cameraPosition);
+	}
+
+	/// <summary>
+	/// Generates and draws one layer. Layers share the instance buffer, so the barriers around each
+	/// one also order it against the layer before: the transition back to UnorderedAccess cannot
+	/// start until the previous layer's draw has finished reading. That serializes the layers on the
+	/// GPU, which is the price of not allocating the whole budget once per layer.
+	/// </summary>
+	private void RecordLayer(GrassLayer layer, LayerState state, Vector3 cameraPosition)
+	{
+		if (layer is null || !layer.Enabled || state.ChunkCount == 0)
+			return;
+
+		var definition = layer.Definition;
+
+		var visibleCount = CollectVisibleChunks(state, cameraPosition, definition?.MaxDistance ?? 12000.0f);
 		if (visibleCount == 0)
 			return;
 
-		var (material, vertexCount) = GetDrawSetup();
+		var (material, vertexCount) = GetDrawSetup(definition);
 
 		if (material is null)
 		{
-			if (!_warnedAboutMaterial)
+			if (!state.WarnedAboutMaterial)
 			{
-				_warnedAboutMaterial = true;
-				Log.Warning($"{nameof(GrassRenderer)}: the grass definition is set to Sprites but names no " +
-					"Sprite Material, so there is nothing to draw with. Assign a material using the " +
-					"grass_sprite shader, with the sprite sheet in its Color slot and a greyscale " +
-					"image of the cutout in its Alpha slot.");
+				state.WarnedAboutMaterial = true;
+				Log.Warning($"{nameof(GrassRenderer)}: layer '{layer.DisplayName}' is set to Sprites but names " +
+					"no Sprite Material, so there is nothing to draw it with. Assign a material using the " +
+					"grass_sprite shader, with the sprite sheet in its Color slot and a greyscale image of " +
+					"the cutout in its Alpha slot.");
 			}
 
 			return;
 		}
 
-		_warnedAboutMaterial = false;
+		state.WarnedAboutMaterial = false;
 
 		// The vertex count only changes when the style or the plane count does, so it is written
 		// then rather than every frame: an unconditional SetData here would be a CPU write racing
 		// the CopyStructureCount below, which fills in the instance count of the same struct.
-		if (vertexCount != _uploadedVertexCount)
+		if (vertexCount != state.UploadedVertexCount)
 		{
-			_argsBuffer.SetData(new[] { new GpuBuffer.IndirectDrawArguments { VertexCount = (uint)vertexCount } });
-			_uploadedVertexCount = vertexCount;
+			state.ArgsBuffer.SetData(new[] { new GpuBuffer.IndirectDrawArguments { VertexCount = (uint)vertexCount } });
+			state.UploadedVertexCount = vertexCount;
 		}
 
-		UploadFrustumPlanes(camera);
-
-		_commandList.Attributes.Set("GrassChunks", _chunkBuffer);
-		_commandList.Attributes.Set("GrassCells", _cellBuffer);
-		_commandList.Attributes.Set("GrassVisibleChunks", _visibleChunkBuffer);
-		_commandList.Attributes.Set("GrassFrustumPlanes", _frustumPlaneBuffer);
-		_commandList.Attributes.Set("GrassBlades", _bladeBuffer);
+		_commandList.Attributes.Set("GrassChunks", state.ChunkBuffer);
+		_commandList.Attributes.Set("GrassCells", state.CellBuffer);
+		_commandList.Attributes.Set("GrassVisibleChunks", state.VisibleChunkBuffer);
 		_commandList.Attributes.Set("GrassVisibleChunkCount", visibleCount);
-		_commandList.Attributes.Set("GrassCameraPos", cameraPosition);
-		_commandList.Attributes.Set("GrassTime", RealTime.Now);
+		_commandList.Attributes.Set("GrassSeed", layer.Seed);
 
 		definition?.ApplyTo(_commandList.Attributes);
 
@@ -329,24 +506,22 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		// The appends must all land before the counter is read into the draw arguments.
 		_commandList.UavBarrier(_bladeBuffer);
 
-		_commandList.ResourceBarrierTransition(_argsBuffer, ResourceState.CopyDestination);
-		_commandList.CopyStructureCount(_bladeBuffer, _argsBuffer, ArgsInstanceCountOffset);
+		_commandList.ResourceBarrierTransition(state.ArgsBuffer, ResourceState.CopyDestination);
+		_commandList.CopyStructureCount(_bladeBuffer, state.ArgsBuffer, ArgsInstanceCountOffset);
 
 		_commandList.ResourceBarrierTransition(_bladeBuffer, ResourceState.GenericRead);
-		_commandList.ResourceBarrierTransition(_argsBuffer, ResourceState.IndirectArgument);
+		_commandList.ResourceBarrierTransition(state.ArgsBuffer, ResourceState.IndirectArgument);
 
-		_commandList.DrawInstancedIndirect(material, _argsBuffer);
+		_commandList.DrawInstancedIndirect(material, state.ArgsBuffer);
 	}
 
 	/// <summary>
-	/// The material and per-instance vertex count the current style draws with. Both shaders read
-	/// the same instance buffer filled by the same generation pass; they differ only in what the
-	/// vertex stage builds out of each instance.
+	/// The material and per-instance vertex count a definition draws with. Both shaders read the
+	/// same instance buffer filled by the same generation pass; they differ only in what the vertex
+	/// stage builds out of each instance.
 	/// </summary>
-	private (Material Material, int VertexCount) GetDrawSetup()
+	private (Material Material, int VertexCount) GetDrawSetup(GrassDefinition definition)
 	{
-		var definition = Definition;
-
 		// Sprite cards draw with the material the definition names, because that is what carries
 		// the sheet. Null until one is assigned, and the caller skips the draw.
 		if (definition is not null && definition.Style == GrassStyle.Sprites)
@@ -357,10 +532,10 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	}
 
 	/// <summary>
-	/// Narrows the dispatch to chunks near the camera. Per-blade frustum culling happens on the
-	/// GPU; this only has to be conservative.
+	/// Narrows a layer's dispatch to chunks near the camera. Per-instance frustum culling happens
+	/// on the GPU; this only has to be conservative.
 	/// </summary>
-	private int CollectVisibleChunks(Vector3 cameraPosition, float maxDistance)
+	private static int CollectVisibleChunks(LayerState state, Vector3 cameraPosition, float maxDistance)
 	{
 		// A chunk's near corner can be in range while its centre isn't, hence the circumradius.
 		var cullRadius = maxDistance + GrassStorage.ChunkSize * 0.7072f;
@@ -369,20 +544,20 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		var halfChunk = GrassStorage.ChunkSize * 0.5f;
 		var count = 0;
 
-		for (var i = 0; i < _chunkOrigins.Count; i++)
+		for (var i = 0; i < state.ChunkOrigins.Count; i++)
 		{
-			var origin = _chunkOrigins[i];
+			var origin = state.ChunkOrigins[i];
 			var dx = origin.x + halfChunk - cameraPosition.x;
 			var dy = origin.y + halfChunk - cameraPosition.y;
 
 			if (dx * dx + dy * dy > cullRadiusSq)
 				continue;
 
-			_visibleScratch[count++] = i;
+			state.VisibleScratch[count++] = i;
 		}
 
 		if (count > 0)
-			_visibleChunkBuffer.SetData(_visibleScratch.AsSpan(0, count));
+			state.VisibleChunkBuffer.SetData(state.VisibleScratch.AsSpan(0, count));
 
 		return count;
 	}
@@ -391,12 +566,12 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	{
 		var frustum = camera.GetFrustum();
 
-		// These planes are sampled once on the CPU but the blades they cull are not drawn until the
+		// These planes are sampled once on the CPU but the grass they cull is not drawn until the
 		// frame presents, by which point the camera has kept turning. Pushing every plane outward
-		// gives the generation something to work with at the screen edges - without it, blades
-		// rotating into view were culled before they were ever needed, which reads as them
-		// streaming in from the sides. The slack that buys scales with the frame time, so a capped
-		// or struggling framerate is exactly when it matters most.
+		// gives the generation something to work with at the screen edges - without it, grass
+		// rotating into view was culled before it was ever needed, which reads as it streaming in
+		// from the sides. The slack that buys scales with the frame time, so a capped or struggling
+		// framerate is exactly when it matters most.
 		var padding = MathF.Max(CullPadding, 0.0f);
 
 		// Plane.GetDistance is dot( point, Normal ) - Distance, so w is negated to let the shader
@@ -408,7 +583,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_planeScratch[4] = ToVector4(frustum.NearPlane, padding);
 
 		// The far plane is left tight - MaxDistance already governs the far edge, and padding it
-		// would only generate blades that fade out before they are ever visible.
+		// would only generate grass that fades out before it is ever visible.
 		_planeScratch[5] = ToVector4(frustum.FarPlane, 0.0f);
 
 		_frustumPlaneBuffer.SetData(_planeScratch);
@@ -419,48 +594,48 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 	private void ReleaseBuffers()
 	{
-		_chunkBuffer?.Dispose();
-		_chunkBuffer = null;
+		foreach (var state in _layerStates)
+			state.Release();
 
-		_cellBuffer?.Dispose();
-		_cellBuffer = null;
-
-		_visibleChunkBuffer?.Dispose();
-		_visibleChunkBuffer = null;
+		_layerStates.Clear();
 
 		_frustumPlaneBuffer?.Dispose();
 		_frustumPlaneBuffer = null;
 
 		_bladeBuffer?.Dispose();
 		_bladeBuffer = null;
-
-		_argsBuffer?.Dispose();
-		_argsBuffer = null;
-
-		_chunkOrigins.Clear();
-		_chunkCount = 0;
-		_uploadedVertexCount = -1;
 	}
 
 	/// <summary>
 	/// Called by the editor tool after painting, so the next frame re-uploads the density map.
 	/// </summary>
-	public void MarkDirty() => _uploadedVersion = -1;
+	public void MarkDirty()
+	{
+		foreach (var state in _layerStates)
+			state.UploadedVersion = -1;
+	}
 
 	protected override void DrawGizmos()
 	{
-		if (!Gizmo.IsSelected || Storage is null || Storage.ChunkCount == 0)
+		if (!Gizmo.IsSelected || Layers is null)
 			return;
 
 		Gizmo.Draw.Color = Color.Green.WithAlpha(0.35f);
 
-		foreach (var (coord, _) in Storage.Chunks)
+		foreach (var layer in Layers)
 		{
-			var origin = GrassStorage.ChunkOrigin(coord);
-			var mins = new Vector3(origin.x, origin.y, 0);
-			var maxs = new Vector3(origin.x + GrassStorage.ChunkSize, origin.y + GrassStorage.ChunkSize, 0);
+			var storage = layer?.Storage;
+			if (storage is null || storage.ChunkCount == 0)
+				continue;
 
-			Gizmo.Draw.LineBBox(new BBox(WorldTransform.PointToLocal(mins), WorldTransform.PointToLocal(maxs)));
+			foreach (var (coord, _) in storage.Chunks)
+			{
+				var origin = GrassStorage.ChunkOrigin(coord);
+				var mins = new Vector3(origin.x, origin.y, 0);
+				var maxs = new Vector3(origin.x + GrassStorage.ChunkSize, origin.y + GrassStorage.ChunkSize, 0);
+
+				Gizmo.Draw.LineBBox(new BBox(WorldTransform.PointToLocal(mins), WorldTransform.PointToLocal(maxs)));
+			}
 		}
 	}
 }

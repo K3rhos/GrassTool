@@ -37,7 +37,7 @@ public sealed class GrassDefinition : GameResource
 	/// Sprite group, which is cards only, and Root/Tip Color, which blades only - a card takes its
 	/// colour from the sheet.
 	/// </summary>
-	[Property, Group("Style")]
+	[Property, Group("Blade")]
 	public GrassStyle Style { get; set; } = GrassStyle.Blades;
 
 	[Property, Group("Density"), Range(1, 32)]
@@ -80,10 +80,10 @@ public sealed class GrassDefinition : GameResource
 	[Property, Group("Blade"), Range(0, 1)]
 	public float AlignToGround { get; set; } = 0.35f;
 
-	[Property, Group("Color")]
+	[Property, Group("Color"), ShowIf(nameof(Style), GrassStyle.Blades)]
 	public Color RootColor { get; set; } = new(0.11f, 0.20f, 0.06f);
 
-	[Property, Group("Color")]
+	[Property, Group("Color"), ShowIf(nameof(Style), GrassStyle.Blades)]
 	public Color TipColor { get; set; } = new(0.42f, 0.58f, 0.18f);
 
 	/// <summary>Per-blade brightness jitter, so a field doesn't read as one flat sheet.</summary>
@@ -141,13 +141,13 @@ public sealed class GrassDefinition : GameResource
 	/// that is what the engine's texture streaming watches. A texture passed straight as a render
 	/// attribute is invisible to it, and gets its mips evicted out from under the draw.
 	/// </summary>
-	[Property, Group("Sprite")]
+	[Property, Group("Sprite"), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public Material SpriteMaterial { get; set; }
 
-	[Property, Group("Sprite"), Range(1, 16)]
+	[Property, Group("Sprite"), Range(1, 16), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public int SpriteColumns { get; set; } = 4;
 
-	[Property, Group("Sprite"), Range(1, 16)]
+	[Property, Group("Sprite"), Range(1, 16), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public int SpriteRows { get; set; } = 4;
 
 	/// <summary>
@@ -155,7 +155,7 @@ public sealed class GrassDefinition : GameResource
 	/// top left and each card picks one at random, so a part-filled sheet needs this set to the
 	/// number of real sprites or cards will draw the empty cells.
 	/// </summary>
-	[Property, Group("Sprite"), Range(1, 64)]
+	[Property, Group("Sprite"), Range(1, 64), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public int SpriteCount { get; set; } = 4;
 
 	/// <summary>
@@ -163,7 +163,7 @@ public sealed class GrassDefinition : GameResource
 	/// is almost always the right answer; three covers more viewing angles for half as much again
 	/// in overdraw.
 	/// </summary>
-	[Property, Group("Sprite"), Range(1, 3)]
+	[Property, Group("Sprite"), Range(1, 3), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public int Planes { get; set; } = 2;
 
 	/// <summary>
@@ -172,7 +172,7 @@ public sealed class GrassDefinition : GameResource
 	/// threshold is a hard edge. Lower it if distant grass thins out, which is mipmapping eroding
 	/// the alpha channel.
 	/// </summary>
-	[Property, Group("Sprite"), Range(0, 1)]
+	[Property, Group("Sprite"), Range(0, 1), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public float AlphaCutoff { get; set; } = 0.35f;
 
 	/// <summary>
@@ -180,11 +180,11 @@ public sealed class GrassDefinition : GameResource
 	/// This is also what hides grass streaming in, since a card entering range does so at the far
 	/// edge where it is fully faded out. Worth a good fraction of the render distance.
 	/// </summary>
-	[Property, Group("Sprite"), Range(0, 4000)]
+	[Property, Group("Sprite"), Range(0, 4000), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public float CardFade { get; set; } = 800.0f;
 
 	/// <summary>Multiplies the sheet, for matching one set of sprites to a drier or greener scene.</summary>
-	[Property, Group("Sprite")]
+	[Property, Group("Sprite"), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public Color CardTint { get; set; } = Color.White;
 
 	/// <summary>Sprites the sheet really holds, clamped to the cells the grid actually has.</summary>

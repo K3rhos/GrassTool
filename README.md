@@ -63,12 +63,30 @@ than by the grass definition — so a sheet of ground cover can't be paired with
   square and take both axes from `Blade > Width`; `Height` does nothing for them, and they don't
   sway, since moss on a rock has nothing to bend.
 
-## Mixing the two
+## Layers
 
-Use **one renderer and one definition per kind of grass** — a `GrassRenderer` for the upright grass
-and a second one for the ground cover, each with its own `.grassdef` and material.
+A renderer holds a list of **layers**, each one a kind of grass: its own definition, its own
+material, and its own painted coverage. Add one per kind — tall grass, ground cover, whatever — and
+pick which one the brush writes into from the **Layer** dropdown at the top of the Grass tool's
+sidebar. "Clear Layer" only wipes the layer you have selected.
 
-They paint independently, which is the point: each renderer owns its own coverage, so the brush
-affects whichever one you have selected and you can put moss where the tall grass isn't. Density,
-render distance and card size are all per-definition too, and ground cover usually wants a shorter
-distance and a tighter spacing than grass that stands up.
+Each layer carries a **Seed**. Every random choice a cell makes — where its grass sits, which way
+it faces, how big it is, which sprite it takes — comes from hashing the cell's position, so two
+layers over the same ground with the same seed would drop their grass in exactly the same spots. A
+new layer picks a random one, so this normally looks after itself; set two layers to the same seed
+on purpose and they line up, which is occasionally what you want (flowers that always sit in the
+same tufts as the grass).
+
+Because each layer keeps its own coverage, they overlap freely: ground cover can sit *under* tall
+grass in the same cells rather than competing for them. Density, render distance, card size and
+style are all per-definition too, and ground cover usually wants a shorter distance and tighter
+spacing than grass that stands up.
+
+Layers share one instance buffer and draw one after another, so `Max Grass Objects` has to fit the
+largest single layer rather than their total — adding a layer costs a dispatch and a draw, not
+another allocation of the whole budget.
+
+Only one renderer is allowed per scene — a second one removes itself on awake and says so in the
+console, since layers are the way to have more than one kind of grass. A renderer painted before
+layers existed migrates into its first layer on load, keeping its definition and everything painted
+into it.

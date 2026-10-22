@@ -19,6 +19,9 @@ public sealed class GrassPaintTool : EditorTool
 	public BrushSettings BrushSettings { get; private set; } = new();
 
 	private GrassRenderer _target;
+	private int _layerIndex;
+	private ComboBox _layerCombo;
+	private int _layerComboHash;
 	private bool _erasing;
 	private bool _dragging;
 	private bool _painted;
@@ -40,6 +43,14 @@ public sealed class GrassPaintTool : EditorTool
 		sidebar.MinimumWidth = 300;
 
 		{
+			var group = sidebar.AddGroup("Layer");
+			_layerCombo = new ComboBox();
+			_layerComboHash = 0;
+			group.Add(_layerCombo);
+			RebuildLayerCombo();
+		}
+
+		{
 			var group = sidebar.AddGroup("Brush");
 			var so = BrushSettings.GetSerialized();
 			group.Add(ControlSheet.CreateRow(so.GetProperty(nameof(BrushSettings.Size))));
@@ -49,12 +60,12 @@ public sealed class GrassPaintTool : EditorTool
 		{
 			var group = sidebar.AddGroup("Actions");
 
-			var clear = new Button("Clear All Grass", "delete_sweep");
-			clear.ToolTip = "Remove every painted cell from the target Grass Renderer";
+			var clear = new Button("Clear Layer", "delete_sweep");
+			clear.ToolTip = "Remove every painted cell from the selected layer";
 			clear.Clicked += () =>
 			{
-				var target = ResolveTarget();
-				if (!target.IsValid() || target.Storage is null)
+				var layer = ResolveLayer();
+				if (layer?.Storage is null)
 					return;
 
 				// Wiping the density map throws away every stroke and there is no undo for it,
@@ -62,11 +73,12 @@ public sealed class GrassPaintTool : EditorTool
 				Dialog.AskConfirm(
 					() =>
 					{
-						target.Storage.ClearAll();
-						target.MarkDirty();
+						layer.Storage.ClearAll();
+						_target?.MarkDirty();
 					},
-					"Are you sure you want to delete all grass? This action cannot be undone.",
-					"Delete All Grass",
+					$"Are you sure you want to delete all grass painted into '{layer.DisplayName}'? " +
+						"This action cannot be undone.",
+					"Delete Layer's Grass",
 					"Delete",
 					"Cancel");
 			};
@@ -82,6 +94,8 @@ public sealed class GrassPaintTool : EditorTool
 
 	public override void OnUpdate()
 	{
+		RebuildLayerCombo();
+
 		_erasing = Gizmo.IsCtrlPressed;
 
 		DrawBrushPreview();
@@ -135,10 +149,69 @@ public sealed class GrassPaintTool : EditorTool
 		return _target;
 	}
 
-	private void OnPaintUpdate()
+	/// <summary>
+	/// The layer the brush writes into. Layers each keep their own coverage, so this is what decides
+	/// whether a stroke lands on the tall grass or the ground cover.
+	/// </summary>
+	private GrassLayer ResolveLayer()
 	{
 		var target = ResolveTarget();
-		if (!target.IsValid() || target.Storage is null)
+		if (!target.IsValid() || target.Layers is null || target.Layers.Count == 0)
+			return null;
+
+		_layerIndex = Math.Clamp(_layerIndex, 0, target.Layers.Count - 1);
+		return target.Layers[_layerIndex];
+	}
+
+	/// <summary>
+	/// Refills the layer dropdown when the renderer or its layers change. Rebuilt from a hash rather
+	/// than every frame, since replacing the items would fight the user opening the list.
+	/// </summary>
+	private void RebuildLayerCombo()
+	{
+		if (_layerCombo is null)
+			return;
+
+		var target = ResolveTarget();
+		var layers = target.IsValid() ? target.Layers : null;
+
+		var hash = new HashCode();
+		hash.Add(target);
+
+		if (layers is not null)
+		{
+			for (var i = 0; i < layers.Count; i++)
+				hash.Add(layers[i]?.DisplayName);
+		}
+
+		var combined = hash.ToHashCode();
+		if (combined == _layerComboHash)
+			return;
+
+		_layerComboHash = combined;
+		_layerCombo.Clear();
+
+		if (layers is null || layers.Count == 0)
+		{
+			_layerCombo.AddItem("No layers", onSelected: () => _layerIndex = 0, selected: true);
+			_layerCombo.ToolTip = "Add a layer to the Grass Renderer to paint into";
+			return;
+		}
+
+		_layerIndex = Math.Clamp(_layerIndex, 0, layers.Count - 1);
+		_layerCombo.ToolTip = "Which layer the brush paints into";
+
+		for (var i = 0; i < layers.Count; i++)
+		{
+			var index = i;
+			_layerCombo.AddItem(layers[i]?.DisplayName ?? "Unnamed", onSelected: () => _layerIndex = index, selected: i == _layerIndex);
+		}
+	}
+
+	private void OnPaintUpdate()
+	{
+		var layer = ResolveLayer();
+		if (layer?.Storage is null)
 			return;
 
 		var cursor = TraceCursor();
@@ -156,12 +229,12 @@ public sealed class GrassPaintTool : EditorTool
 
 		if (_erasing)
 		{
-			target.Storage.Erase(cursor.HitPosition, radius, strength);
+			layer.Storage.Erase(cursor.HitPosition, radius, strength);
 			_painted = true;
 			return;
 		}
 
-		PaintCells(target, cursor.HitPosition, radius, strength);
+		PaintCells(layer.Storage, cursor.HitPosition, radius, strength);
 		_painted = true;
 	}
 
@@ -169,7 +242,7 @@ public sealed class GrassPaintTool : EditorTool
 	/// Walks every density cell the brush touches and traces straight down onto the world to bake
 	/// the surface height and normal. Blades then follow whatever they were painted onto.
 	/// </summary>
-	private void PaintCells(GrassRenderer target, Vector3 center, float radius, float strength)
+	private void PaintCells(GrassStorage storage, Vector3 center, float radius, float strength)
 	{
 		var radiusSq = radius * radius;
 
@@ -210,10 +283,10 @@ public sealed class GrassPaintTool : EditorTool
 				var falloff = 1.0f - MathF.Sqrt(distSq) / radius;
 				var added = strength * MathF.Pow(falloff, 0.5f);
 
-				var existing = target.Storage.GetCell(wx, wy).Density;
+				var existing = storage.GetCell(wx, wy).Density;
 				var density = Math.Clamp(existing + added, 0.0f, 1.0f);
 
-				target.Storage.SetCell(wx, wy, density, tr.HitPosition.z, tr.Normal);
+				storage.SetCell(wx, wy, density, tr.HitPosition.z, tr.Normal);
 			}
 		}
 	}

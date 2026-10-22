@@ -1,6 +1,6 @@
 {
   "Style": "Sprites",
-  "BladesPerCell": 8,
+  "BladesPerCell": 12,
   "MaxDistance": 15000,
   "FadeStart": 4000,
   "SlopeLimit": 0.5,
