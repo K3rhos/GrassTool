@@ -26,11 +26,11 @@
   "SpriteColumns": 4,
   "SpriteRows": 4,
   "SpriteCount": 6,
+  "Sprites": [],
   "Planes": 2,
   "AlphaCutoff": 0.35,
   "CardFade": 800,
   "CardTint": "1,1,1,1",
-  "SpriteVariantCount": 6,
   "PlaneCount": 2,
   "__references": [],
   "__version": 0

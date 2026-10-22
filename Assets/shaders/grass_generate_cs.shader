@@ -39,7 +39,10 @@ CS
 	float2 GrassBladeHeight < Attribute( "GrassBladeHeight" ); >;
 	float2 GrassBladeWidth < Attribute( "GrassBladeWidth" ); >;
 
-	// Sprites on the sheet. One for the blade style, which has no sheet and ignores the variant.
+	// Which cells of the sheet this layer draws from, as a table of grid indices, and how many
+	// entries it holds. A table rather than a count because a definition can cherry-pick cells -
+	// 3, 4, 5 here and 7, 8, 10 there - so one sheet serves several of them.
+	StructuredBuffer<int> GrassSpriteVariants < Attribute( "GrassSpriteVariants" ); >;
 	int GrassSpriteCount < Attribute( "GrassSpriteCount" ); Default( 1 ); >;
 
 	// Decorrelates one layer from another. Every random choice below comes from hashing the cell's
@@ -176,7 +179,8 @@ CS
 			// HashF never reaches 1, so this lands in 0 .. count-1; the min is belt and braces
 			// against a sprite count the material doesn't actually have.
 			int variantCount = max( GrassSpriteCount, 1 );
-			blade.Variant = min( floor( rVariant * variantCount ), (float)( variantCount - 1 ) );
+			int pick = min( (int)floor( rVariant * variantCount ), variantCount - 1 );
+			blade.Variant = (float)GrassSpriteVariants[pick];
 
 			GrassBlades.Append( blade );
 		}

@@ -96,6 +96,11 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		public GpuBuffer<int> VisibleChunkBuffer;
 		public GpuBuffer<GpuBuffer.IndirectDrawArguments> ArgsBuffer;
 
+		// Which cells of the sheet this layer draws from. Uploaded as a table the generation pass
+		// indexes, so picking a sprite is one lookup whatever the selection looks like.
+		public GpuBuffer<int> SpriteBuffer;
+		public readonly List<int> UploadedSprites = [];
+
 		public readonly List<Vector2> ChunkOrigins = [];
 		public int[] VisibleScratch = [];
 
@@ -117,6 +122,10 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 			ArgsBuffer?.Dispose();
 			ArgsBuffer = null;
+
+			SpriteBuffer?.Dispose();
+			SpriteBuffer = null;
+			UploadedSprites.Clear();
 
 			ChunkOrigins.Clear();
 			ChunkCount = 0;
@@ -183,6 +192,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	private GpuBuffer<GpuBlade> _bladeBuffer;
 
 	private readonly List<LayerState> _layerStates = [];
+	private readonly List<int> _spriteScratch = [];
 	private readonly Vector4[] _planeScratch = new Vector4[6];
 
 	private CameraComponent _lastCamera;
@@ -481,6 +491,8 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		state.WarnedAboutMaterial = false;
 
+		UpdateSpriteTable(state, definition);
+
 		// The vertex count only changes when the style or the plane count does, so it is written
 		// then rather than every frame: an unconditional SetData here would be a CPU write racing
 		// the CopyStructureCount below, which fills in the instance count of the same struct.
@@ -495,6 +507,8 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_commandList.Attributes.Set("GrassVisibleChunks", state.VisibleChunkBuffer);
 		_commandList.Attributes.Set("GrassVisibleChunkCount", visibleCount);
 		_commandList.Attributes.Set("GrassSeed", layer.Seed);
+		_commandList.Attributes.Set("GrassSpriteVariants", state.SpriteBuffer);
+		_commandList.Attributes.Set("GrassSpriteCount", state.UploadedSprites.Count);
 
 		definition?.ApplyTo(_commandList.Attributes);
 
@@ -513,6 +527,49 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 		_commandList.ResourceBarrierTransition(state.ArgsBuffer, ResourceState.IndirectArgument);
 
 		_commandList.DrawInstancedIndirect(material, state.ArgsBuffer);
+	}
+
+	/// <summary>
+	/// Keeps the layer's table of sheet cells in step with its definition. Rebuilt only when the
+	/// selection actually changes, which is almost never - the comparison is a handful of ints.
+	/// </summary>
+	private void UpdateSpriteTable(LayerState state, GrassDefinition definition)
+	{
+		_spriteScratch.Clear();
+
+		if (definition is not null && definition.Style == GrassStyle.Sprites)
+		{
+			definition.GetSpriteCells(_spriteScratch);
+		}
+		else
+		{
+			// Blades carry a variant they never read, but the table is indexed either way.
+			_spriteScratch.Add(0);
+		}
+
+		if (state.SpriteBuffer is not null && Matches(state.UploadedSprites, _spriteScratch))
+			return;
+
+		state.SpriteBuffer?.Dispose();
+		state.SpriteBuffer = new GpuBuffer<int>(_spriteScratch.Count, GpuBuffer.UsageFlags.Structured);
+		state.SpriteBuffer.SetData(_spriteScratch);
+
+		state.UploadedSprites.Clear();
+		state.UploadedSprites.AddRange(_spriteScratch);
+
+		static bool Matches(List<int> _Uploaded, List<int> _Wanted)
+		{
+			if (_Uploaded.Count != _Wanted.Count)
+				return false;
+
+			for (var i = 0; i < _Uploaded.Count; i++)
+			{
+				if (_Uploaded[i] != _Wanted[i])
+					return false;
+			}
+
+			return true;
+		}
 	}
 
 	/// <summary>

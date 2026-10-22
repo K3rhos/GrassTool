@@ -39,6 +39,11 @@ instance becomes:
    the draw — the cards go soft and slightly dark until something touches the asset again.
 
    The included sheets are a 4x4 grid of 16 sprites, so set `Sprite Count` to 16.
+
+3. To draw only part of a sheet, list the cells in `Sprite > Sprites` — grid indices counting left
+   to right then top to bottom from zero. `3, 4, 5` for one definition and `7, 8, 10` for another
+   lets a single sheet serve both, instead of cutting a sheet per definition. Leave it empty and
+   the first `Sprite Count` cells are used instead.
 3. Give it card-sized numbers, because the defaults are blade-sized:
    - `Blade > Width` close to `Blade > Height` — the sprites are square, and left at a blade's
      width a card renders as a sliver

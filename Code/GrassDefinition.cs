@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Sandbox;
 using Sandbox.Rendering;
 
@@ -151,12 +152,23 @@ public sealed class GrassDefinition : GameResource
 	public int SpriteRows { get; set; } = 4;
 
 	/// <summary>
-	/// How many cells of the sheet actually hold a sprite. They are taken in reading order from the
-	/// top left and each card picks one at random, so a part-filled sheet needs this set to the
-	/// number of real sprites or cards will draw the empty cells.
+	/// How many cells of the sheet to use, counted in reading order from the top left. Only applies
+	/// when <see cref="Sprites"/> is empty - list cells there to pick them out individually.
 	/// </summary>
 	[Property, Group("Sprite"), Range(1, 64), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public int SpriteCount { get; set; } = 4;
+
+	/// <summary>
+	/// Exactly which cells of the sheet this definition draws, as grid indices counting left to
+	/// right then top to bottom from zero. Cards pick one of them at random.
+	///
+	/// This is what lets one sheet serve several definitions - 3, 4, 5 for the dry tufts and 7, 8,
+	/// 10 for the green ones - instead of cutting a separate sheet per definition. Leave it empty to
+	/// take the first <see cref="SpriteCount"/> cells instead, and indices the grid does not have
+	/// are dropped rather than drawing a blank cell.
+	/// </summary>
+	[Property, Group("Sprite"), ShowIf(nameof(Style), GrassStyle.Sprites)]
+	public List<int> Sprites { get; set; } = [];
 
 	/// <summary>
 	/// Quads each card is built from, spread evenly over a half turn. Two is the classic cross and
@@ -187,8 +199,36 @@ public sealed class GrassDefinition : GameResource
 	[Property, Group("Sprite"), ShowIf(nameof(Style), GrassStyle.Sprites)]
 	public Color CardTint { get; set; } = Color.White;
 
-	/// <summary>Sprites the sheet really holds, clamped to the cells the grid actually has.</summary>
-	public int SpriteVariantCount => Math.Clamp(SpriteCount, 1, Math.Max(SpriteColumns, 1) * Math.Max(SpriteRows, 1));
+	/// <summary>
+	/// Fills <paramref name="_Into"/> with the sheet cells a card may draw, resolving
+	/// <see cref="Sprites"/> against the grid and falling back to the first <see cref="SpriteCount"/>
+	/// cells when nothing usable is listed. Never comes back empty, so the generation pass always
+	/// has something to pick from.
+	/// </summary>
+	public void GetSpriteCells(List<int> _Into)
+	{
+		_Into.Clear();
+
+		var cells = Math.Max(SpriteColumns, 1) * Math.Max(SpriteRows, 1);
+
+		if (Sprites is not null)
+		{
+			foreach (var cell in Sprites)
+			{
+				if (cell >= 0 && cell < cells)
+					_Into.Add(cell);
+			}
+		}
+
+		if (_Into.Count > 0)
+			return;
+
+		// Nothing listed, or none of it resolved against the grid.
+		var count = Math.Clamp(SpriteCount, 1, cells);
+
+		for (var i = 0; i < count; i++)
+			_Into.Add(i);
+	}
 
 	/// <summary>Quads per card, clamped to what the shader's half-turn spread supports.</summary>
 	public int PlaneCount => Math.Clamp(Planes, 1, 3);
@@ -217,10 +257,6 @@ public sealed class GrassDefinition : GameResource
 		attributes.Set("GrassWindStrength", WindStrength);
 		attributes.Set("GrassWindSpeed", WindSpeed);
 		attributes.Set("GrassWindWaveScale", WindWaveScale);
-
-		// The generation pass picks a sprite for every instance whichever style is drawing. One
-		// sprite means they all get variant zero, which is what blades read and ignore.
-		attributes.Set("GrassSpriteCount", Style == GrassStyle.Sprites ? SpriteVariantCount : 1);
 
 		if (Style != GrassStyle.Sprites)
 			return;
