@@ -50,3 +50,25 @@ Cards fade in over the last `Sprite > Card Fade` units of the render distance, d
 That is also what hides grass streaming in as you walk, since a card entering range does so at the
 far edge where it is fully faded out. Cards are cut out rather than blended, so thousands of them
 draw in any order with no sorting and no blending.
+
+## Upright and ground cards
+
+The sprite shader builds two shapes, chosen by the **Ground Cards** feature on the material rather
+than by the grass definition — so a sheet of ground cover can't be paired with the wrong shape:
+
+- **off** — the classic cross: quads standing up out of the ground, crossed through each other.
+- **on** — a flat cross: quads lying *in* the ground, for moss and flattened grass. Each plane tips
+  the opposite way by `Ground Tilt` degrees so the pair reads as a shallow X instead of one decal,
+  and `Ground Lift` raises the patch clear of the surface so it doesn't z-fight. Ground cards are
+  square and take both axes from `Blade > Width`; `Height` does nothing for them, and they don't
+  sway, since moss on a rock has nothing to bend.
+
+## Mixing the two
+
+Use **one renderer and one definition per kind of grass** — a `GrassRenderer` for the upright grass
+and a second one for the ground cover, each with its own `.grassdef` and material.
+
+They paint independently, which is the point: each renderer owns its own coverage, so the brush
+affects whichever one you have selected and you can put moss where the tall grass isn't. Density,
+render distance and card size are all per-definition too, and ground cover usually wants a shorter
+distance and a tighter spacing than grass that stands up.

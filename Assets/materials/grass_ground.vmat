@@ -1,0 +1,18 @@
+// THIS FILE IS AUTO-GENERATED
+
+Layer0
+{
+	shader "shaders/grass_sprite.shader"
+
+	//---- Sprite ----
+	F_GROUND_CARDS 1
+
+	//---- Fog ----
+	g_bFogEnabled "1"
+
+	//---- Sprite ----
+	g_flGroundLift "1.000"
+	g_flGroundTilt "6.000"
+	SpriteSheetAlpha "textures/grass_ground_alpha.png"
+	SpriteSheetColor "textures/grass_ground_rgb.png"
+}

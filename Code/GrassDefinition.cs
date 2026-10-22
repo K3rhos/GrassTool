@@ -57,7 +57,8 @@ public sealed class GrassDefinition : GameResource
 
 	/// <summary>
 	/// How tall, before the distance thinning scales the last one of a cell down. For a sprite
-	/// card this is the height of the card itself.
+	/// card this is the height of the card itself - ground cards have no height, so they ignore
+	/// this and take both of their axes from <see cref="Width"/>.
 	/// </summary>
 	[Property, Group("Blade")]
 	public RangedFloat Height { get; set; } = new(16.0f, 30.0f);
@@ -66,6 +67,7 @@ public sealed class GrassDefinition : GameResource
 	/// How wide. The default is blade-sized: a sprite card wants this close to <see cref="Height"/>
 	/// because the sprites are square, and left at a blade's width a card renders as a sliver.
 	/// Both come from the same random roll, so a large piece of grass is large in both directions.
+	/// A ground card is square, and this is the side of that square.
 	/// </summary>
 	[Property, Group("Blade")]
 	public RangedFloat Width { get; set; } = new(1.5f, 2.5f);

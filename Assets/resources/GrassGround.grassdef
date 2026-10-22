@@ -1,11 +1,11 @@
 {
   "Style": "Sprites",
   "BladesPerCell": 8,
-  "MaxDistance": 60000,
+  "MaxDistance": 15000,
   "FadeStart": 4000,
   "SlopeLimit": 0.5,
   "Height": "16 30",
-  "Width": "10 20",
+  "Width": "12 20",
   "Curve": 0.15,
   "AlignToGround": 0.35,
   "RootColor": "0.1098,0.2,0.05882,1",
@@ -20,8 +20,8 @@
   "WindSpeed": 1,
   "WindWaveScale": 0.0016,
   "SpriteMaterial": {
-    "Id": "6a29dbf7-f42c-4c41-bf8a-a91913635c3c",
-    "Path": "materials/grass_sprites.vmat"
+    "Id": "d1f09e60-a342-401f-b441-1e0eeb197719",
+    "Path": "materials/grass_ground.vmat"
   },
   "SpriteColumns": 4,
   "SpriteRows": 4,

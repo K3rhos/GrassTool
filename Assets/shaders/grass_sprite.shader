@@ -7,6 +7,11 @@ HEADER
 FEATURES
 {
 	#include "common/features.hlsl"
+
+	// Upright cards stand up out of the ground; ground cards lie in it, for moss and flattened
+	// grass. It lives on the material rather than the grass definition so a sheet of ground cover
+	// cannot be paired with the wrong shape.
+	Feature( F_GROUND_CARDS, 0..1, "Sprite" );
 }
 
 MODES
@@ -64,6 +69,17 @@ VS
 	float GrassWindWaveScale < Attribute( "GrassWindWaveScale" ); Default( 0.0016 ); >;
 	float GrassTime < Attribute( "GrassTime" ); Default( 0 ); >;
 
+	StaticCombo( S_GROUND_CARDS, F_GROUND_CARDS, Sys( ALL ) );
+
+	#if S_GROUND_CARDS
+		// How far each plane tips out of the ground plane, in degrees. Alternating directions turn a
+		// flat pair into a shallow X, which is what keeps a patch from reading as a decal.
+		float g_flGroundTilt < Default( 12.0 ); Range( 0.0, 45.0 ); UiGroup( "Sprite,10/30" ); >;
+
+		// Lifts the patch clear of the surface it sits on, so it does not z-fight the ground.
+		float g_flGroundLift < Default( 2.0 ); Range( 0.0, 64.0 ); UiGroup( "Sprite,10/40" ); >;
+	#endif
+
 	PixelInput MainVs( uint vertexId : SV_VertexID, uint instanceId : SV_InstanceID )
 	{
 		GrassBlade card = GrassBlades[instanceId];
@@ -84,30 +100,66 @@ VS
 		float planeAngle = card.Yaw + ( (float)plane / (float)max( GrassCardPlanes, 1 ) ) * 3.14159265;
 		float3 facing = float3( cos( planeAngle ), sin( planeAngle ), 0 );
 
-		// The card spans its width along 'right' and its height along 'up'.
+		// One of the card's axes, in the ground plane either way.
 		float3 right = normalize( facing - up * dot( facing, up ) );
-		float3 cardNormal = normalize( cross( right, up ) );
 
-		// Travelling wave, so a field ripples rather than every card leaning in lockstep.
-		float2 windDir = normalize( GrassWindDirection + 1e-6 );
-		float phase = GrassTime * GrassWindSpeed + card.Phase * 6.28318531 + dot( card.Position.xy, windDir ) * GrassWindWaveScale;
-		float wind = sin( phase ) * 0.7 + sin( phase * 2.3 + 1.7 ) * 0.3;
+		float3 positionWs;
+		float3 cardNormal;
+		float3 tangentV;
 
-		float v = cardUv.y;
+		// How far up the card a pixel is, for the shading gradient toward the root.
+		float shadeHeight;
 
-		// Quadratic in height keeps the root planted while the top carries the whole deflection.
-		// The lean is along the wind rather than along each card's own yaw, so every plane of a
-		// card displaces by the same world vector and the cross stays rigid instead of shearing.
-		// Clamped because 'rise' below is only meaningful for |bend| <= 1.
-		float bend = clamp( ( GrassBladeCurve + wind * GrassWindStrength ) * v * v, -1.0, 1.0 );
+		#if S_GROUND_CARDS
+			// Both axes lie in the ground, so the quad is a flat square patch rather than a standing
+			// sheet. Width sizes both of them - Height has no meaning for a card with no height.
+			float3 alongB = cross( up, right );
 
-		// Leaning costs the card height, otherwise it visibly stretches as it goes over.
-		float rise = sqrt( saturate( 1.0 - bend * bend ) );
+			// Each plane tips the opposite way, so in profile the pair reads as a shallow X. Flat
+			// planes stacked at the same angle would just look like one decal.
+			float tilt = radians( g_flGroundTilt ) * ( ( plane & 1 ) ? -1.0 : 1.0 );
+			float3 tiltedB = alongB * cos( tilt ) + up * sin( tilt );
 
-		float3 positionWs = card.Position;
-		positionWs += up * ( card.Height * v * rise );
-		positionWs += float3( windDir, 0.0 ) * ( card.Height * bend );
-		positionWs += right * ( ( cardUv.x - 0.5 ) * card.Width );
+			positionWs = card.Position + up * g_flGroundLift;
+			positionWs += right * ( ( cardUv.x - 0.5 ) * card.Width );
+			positionWs += tiltedB * ( ( cardUv.y - 0.5 ) * card.Width );
+
+			cardNormal = normalize( cross( right, tiltedB ) );
+			tangentV = tiltedB;
+
+			// No part of a ground card is nearer the root than any other, so the gradient the upright
+			// ones use would only darken one edge of the patch. Shade it flat.
+			shadeHeight = 1.0;
+
+			// Ground cover does not sway - moss on a rock has nothing to bend.
+		#else
+			// The card spans its width along 'right' and its height along 'up'.
+			cardNormal = normalize( cross( right, up ) );
+
+			// Travelling wave, so a field ripples rather than every card leaning in lockstep.
+			float2 windDir = normalize( GrassWindDirection + 1e-6 );
+			float phase = GrassTime * GrassWindSpeed + card.Phase * 6.28318531 + dot( card.Position.xy, windDir ) * GrassWindWaveScale;
+			float wind = sin( phase ) * 0.7 + sin( phase * 2.3 + 1.7 ) * 0.3;
+
+			float v = cardUv.y;
+
+			// Quadratic in height keeps the root planted while the top carries the whole deflection.
+			// The lean is along the wind rather than along each card's own yaw, so every plane of a
+			// card displaces by the same world vector and the cross stays rigid instead of shearing.
+			// Clamped because 'rise' below is only meaningful for |bend| <= 1.
+			float bend = clamp( ( GrassBladeCurve + wind * GrassWindStrength ) * v * v, -1.0, 1.0 );
+
+			// Leaning costs the card height, otherwise it visibly stretches as it goes over.
+			float rise = sqrt( saturate( 1.0 - bend * bend ) );
+
+			positionWs = card.Position;
+			positionWs += up * ( card.Height * v * rise );
+			positionWs += float3( windDir, 0.0 ) * ( card.Height * bend );
+			positionWs += right * ( ( cardUv.x - 0.5 ) * card.Width );
+
+			tangentV = normalize( up * rise + float3( windDir, 0.0 ) * ( 2.0 * bend ) );
+			shadeHeight = v;
+		#endif
 
 		// Which sprite of the sheet, as a cell of a columns x rows grid. The card's v runs up from
 		// the root while a sheet's runs down from the top, hence the flip.
@@ -116,7 +168,7 @@ VS
 		uint variant = (uint)card.Variant;
 
 		float2 cell = float2( variant % columns, variant / columns );
-		float2 sheetUv = ( cell + float2( cardUv.x, 1.0 - v ) ) / float2( columns, rows );
+		float2 sheetUv = ( cell + float2( cardUv.x, 1.0 - cardUv.y ) ) / float2( columns, rows );
 
 		// Fades in over the last stretch of the render range. A card entering range appears at the
 		// far edge, where this is 0, so one term covers both the far edge and streaming in.
@@ -130,11 +182,11 @@ VS
 		o.vNormalWs = cardNormal;
 		o.vTextureCoords = float4( sheetUv, 0, 0 );
 		o.vVertexColor = float4( 1, 1, 1, 1 );
-		o.vCardCoords = float3( v, card.Tint, fade );
+		o.vCardCoords = float3( shadeHeight, card.Tint, fade );
 
 		#if ( PS_INPUT_HAS_TANGENT_BASIS )
 			o.vTangentUWs = right;
-			o.vTangentVWs = normalize( up * rise + float3( windDir, 0.0 ) * ( 2.0 * bend ) );
+			o.vTangentVWs = tangentV;
 		#endif
 
 		return o;

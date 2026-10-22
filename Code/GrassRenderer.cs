@@ -59,7 +59,7 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	/// and the density, and this only needs to be big enough to hold the result. Set it too low and
 	/// the generation overruns it, at which point which grass gets a slot is settled by whichever
 	/// GPU thread reaches the counter first - an order that changes every frame, so patches flicker
-	/// in and out. Turn on <see cref="TrackInstanceCount"/> to see how close to it you run.
+	/// in and out - which is the symptom to recognise if grass ever starts churning at distance.
 	/// </summary>
 	[Property, Group("General"), Range(50000, 8000000), Alias("MaxBlades")]
 	public int MaxGrassObjects { get; set; } = 1000000;
@@ -72,27 +72,6 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	/// </summary>
 	[Property, Group("General"), Range(0, 4000)]
 	public float CullPadding { get; set; } = 1000.0f;
-
-	/// <summary>
-	/// Reads the instance count back off the GPU, filling in <see cref="LiveInstanceCount"/>. Off
-	/// by default, because the read waits for the GPU to answer - worth turning on while you are
-	/// hunting a problem, not worth leaving on.
-	/// </summary>
-	[Property, Group("Diagnostics")]
-	public bool TrackInstanceCount { get; set; }
-
-	/// <summary>
-	/// Instances the generation pass produced, as of the last readback. Needs
-	/// <see cref="TrackInstanceCount"/> switched on, and lags by a frame.
-	///
-	/// If this reaches <see cref="MaxGrassObjects"/> the buffer is full, and which grass gets a slot is
-	/// then settled by whichever GPU thread reaches the counter first. That order changes every
-	/// frame, so whole patches flicker in and out, and the instances that found no slot read back
-	/// as zeros. Raise <see cref="MaxGrassObjects"/>, or bring the render distance or density down, until
-	/// this has headroom.
-	/// </summary>
-	[Property, Group("Diagnostics"), ReadOnly]
-	public int LiveInstanceCount { get; private set; }
 
 	/// <summary>Painted coverage. Serialized as a binary blob, not JSON.</summary>
 	[Property, Hide]
@@ -119,9 +98,6 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 	private int _uploadedCapacity = -1;
 	private int _uploadedVertexCount = -1;
 
-	private readonly GpuBuffer.IndirectDrawArguments[] _countScratch = new GpuBuffer.IndirectDrawArguments[1];
-	private TimeSince _sinceCountRead;
-	private bool _warnedAboutCapacity;
 	private bool _warnedAboutMaterial;
 
 	protected override void OnEnabled()
@@ -154,9 +130,6 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		_uploadedVersion = -1;
 		_uploadedCapacity = -1;
-
-		_warnedAboutCapacity = false;
-		LiveInstanceCount = 0;
 	}
 
 	protected override void OnUpdate()
@@ -194,55 +167,6 @@ public sealed class GrassRenderer : Component, Component.ExecuteInEditor, Compon
 
 		RefreshBuffers();
 		RecordCommandList(cullCamera);
-		ReadInstanceCount();
-	}
-
-	/// <summary>
-	/// Reads the instance count back off the GPU, so a full buffer shows up as a number instead of
-	/// as grass that flickers for no visible reason.
-	///
-	/// Synchronous, so it waits for the GPU - hence opt-in and throttled rather than every frame.
-	/// The async read would not need the wait, but it has to be issued from inside a render
-	/// context, and a component's Update is not one.
-	/// </summary>
-	private void ReadInstanceCount()
-	{
-		if (!TrackInstanceCount || _argsBuffer is null || _sinceCountRead < 0.5f)
-			return;
-
-		_sinceCountRead = 0.0f;
-
-		try
-		{
-			_argsBuffer.GetData(_countScratch.AsSpan());
-		}
-		catch (Exception e)
-		{
-			// A diagnostic that throws once a frame forever is worse than no diagnostic.
-			TrackInstanceCount = false;
-			Log.Warning($"{nameof(GrassRenderer)}: couldn't read the instance count back, so tracking is off. {e.Message}");
-			return;
-		}
-
-		LiveInstanceCount = (int)_countScratch[0].InstanceCount;
-
-		// Re-arms once there is headroom again, so changing a setting and regressing says so a
-		// second time rather than staying quiet.
-		if (LiveInstanceCount < MaxGrassObjects)
-		{
-			_warnedAboutCapacity = false;
-			return;
-		}
-
-		if (_warnedAboutCapacity)
-			return;
-
-		_warnedAboutCapacity = true;
-
-		Log.Warning($"{nameof(GrassRenderer)}: the instance buffer is full at {MaxGrassObjects:n0}. " +
-			"Grass will flicker as patches compete for slots, because which of them gets one is " +
-			"decided by the GPU afresh every frame. Raise Max Blades, or lower Max Distance or " +
-			"Blades Per Cell.");
 	}
 
 	/// <summary>
